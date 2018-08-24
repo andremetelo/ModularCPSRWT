@@ -1,0 +1,123 @@
+(mod TANKLEFT is 
+   including SATISFACTION .  --- declares State, Prop, and |=
+   including NAT .
+   --- Create State for the tank: < OK , 20 , 5 , 1>
+   sort Tankstatus . 
+   ops ok empty : -> Tankstatus [ctor] .
+   op Lstate : Tankstatus Nat Nat Nat -> State [ctor] . 
+
+   --- Variables for the tank
+   vars X LL R : Nat .  
+   var tankstatus : Tankstatus . 
+
+   crl [L_ok_to_empty] : Lstate(ok, X, LL, R) => Lstate(empty, X, LL, R) if ( X < LL ) .
+   crl [L_empty_to_ok] : Lstate(empty, X, LL, R) => Lstate(ok, X, LL, R) if ( X >= LL ) .
+
+   crl [tick_lock_B] : Lstate(tankstatus, X, LL, R) => Lstate(tankstatus, sd(X, R), LL, R) if (X > R) .
+   crl [tick_lock_B] : Lstate(tankstatus, X, LL, R) => Lstate(tankstatus, 0, LL, R) if (X <= R) .
+
+endm)
+
+(mod TANKRIGHT is 
+   including SATISFACTION .  --- declares State, Prop, and |=
+   including NAT .
+   --- Create State for the tank: < OK , 20 , 5 , 1>
+   sort Tankstatus . 
+   ops ok empty : -> Tankstatus [ctor] .
+   op Rstate : Tankstatus Nat Nat Nat -> State [ctor] . 
+
+   --- Variables for the tank
+   vars X2 LL2 R2 : Nat .  
+   var tankstatus2 : Tankstatus . 
+
+   crl [R_ok_to_empty] : Rstate(ok, X2, LL2, R2) => Rstate(empty, X2, LL2, R2) if ( X2 < LL2 ) .
+   crl [R_empty_to_ok] : Rstate(empty, X2, LL2, R2) => Rstate(ok, X2, LL2, R2) if ( X2 >= LL2 ) .
+
+   crl [tick_lock_B] : Rstate(tankstatus2, X2, LL2, R2) => Rstate(tankstatus2, sd(X2, R2), LL2, R2) if (X2 > R2) .
+   crl [tick_Lock_B] : Rstate(tankstatus2, X2, LL2, R2) => Rstate(tankstatus2, 0, LL2, R2) if (X2 <= R2) .
+endm)
+
+(mod TANKS is
+  pr TANKLEFT || TANKRIGHT . 
+
+  --- Check if tanks ever get to empty at the same time
+  op safe : -> Prop .
+  vars XL LLL RL XR LLR RR W : Nat .
+
+  eq < Lstate(empty, XL, LLL, RL) , Rstate(empty, XR , LLR, RR) > |= safe = false . 
+  eq S:State |= P:Prop = true [owise] .
+
+endm)
+
+(mod HOSE is 
+   including SATISFACTION .  --- declares State, Prop, and |=
+   including NAT .
+ 
+   sort Hosestatus . 
+   ops left right : -> Hosestatus [ctor] .
+   op Hstate : Hosestatus Nat -> State [ctor] . 
+endm)
+
+(mod TANKSANDHOSE is
+    pr TANKS || HOSE . 
+    including SATISFACTION .  --- declares State, Prop, and |=
+    including NAT . 
+    --- Full system controlling the Hose Movement
+    vars XL LLL RL XR LLR RR W : Nat .
+    vars leftstatus rightstatus : Tankstatus .
+    rl [move_left] : < < Lstate(empty, XL, LLL, RL) , Rstate(ok, XR , LLR, RR) > , Hstate(right, W) > =>
+                     < < Lstate(empty, XL, LLL, RL) , Rstate(ok, XR , LLR, RR) > , Hstate(left, W) > .
+
+    rl [move_right] : < < Lstate(ok, XL, LLL, RL) , Rstate(empty, XR , LLR, RR) > , Hstate(left, W) > => 
+                      < < Lstate(ok, XL, LLL, RL) , Rstate(empty, XR , LLR, RR) > , Hstate(right, W) > .
+
+
+    rl [tick_lock_A] : < < Lstate(leftstatus, XL, LLL, RL) , Rstate(rightstatus, XR , LLR, RR) > , Hstate(left, W) > => 
+                      < < Lstate(leftstatus, (XL + W) , LLL, RL) , Rstate(rightstatus, XR, LLR, RR) > , Hstate(left, W) > .
+
+    rl [tick_lock_A] : < < Lstate(leftstatus, XL, LLL, RL) , Rstate(rightstatus, XR , LLR, RR) > , Hstate(right, W) > => 
+                < < Lstate(leftstatus, XL, LLL, RL) , Rstate(rightstatus, (XR + W) , LLR, RR) > , Hstate(right, W) > .
+endm)
+
+(mod CLOCK is
+   including SATISFACTION .  --- declares State, Prop, and |=.
+   including NAT .
+   subsort Nat < State .
+   var ClockCounter : Nat .
+   rl [tick_lock_B] : ClockCounter => ClockCounter + 1 .
+
+  --- Check if tanks ever get to empty at the same time
+  op before10 : -> Prop .
+  vars XL LLL RL XR LLR RR W : Nat .
+
+  ceq ClockCounter |= before10 = true if ClockCounter < 2 . 
+  eq S:State |= P:Prop = false [owise] .
+
+endm)
+
+(mod CLOCKEDTANKANDHOSE is
+    pr TANKSANDHOSE || CLOCK .
+
+    op init : -> State .
+    eq init = < < < Lstate(ok, 3, 2, 1) , Rstate(ok, 3, 2, 1)> , Hstate(right, 2) > , 0 >  .
+endm)
+
+(smod CLOCKETANKANDHOSE-STRAT is
+  strat temporal : @ State .
+  sd temporal := tick_lock_A ; tick_lock_B . 
+
+  strat atemporal : @ State .
+  sd atemporal := ( L_ok_to_empty | L_empty_to_ok | R_ok_to_empty | R_empty_to_ok | move_left | move_right ) .
+
+  strat evolvefull : @ State .
+  sd evolvefull := (atemporal ? (atemporal) *  : temporal)+ . 
+
+  strat evolveverbose : @ State .
+  sd evolveverbose := (atemporal ? atemporal !  : temporal)+ . 
+
+  strat evolve : @ State .
+  sd evolve := (atemporal ! ; temporal)+ . 
+endsm)
+
+(srew init using evolvefull .)(next .)(next .)(next .)(next .)(next .)(next .)(next .)(next .)(next .)(next .)(next .)(next .)(next .)(next .)
+

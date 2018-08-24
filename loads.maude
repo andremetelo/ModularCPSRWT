@@ -1,0 +1,3 @@
+load full-maude.maude .
+load model-checker .
+load sync-prod+strat.maude .

@@ -1,0 +1,117 @@
+(mod WATER is 
+   including SATISFACTION .  --- declares State, Prop, and |=
+   including FLOAT .
+   --- Create State for the Water: < Temp , DC >
+   op Waterstate : Float Float -> State [ctor] . 
+
+  var WT2 DC2 : Float .   
+  rl [tick_lock_B]: Waterstate(WT2, DC2) => Waterstate(WT2 - (WT2 * DC2), DC2) .
+
+endm)
+
+(mod SENSOR is 
+   including SATISFACTION .  --- declares State, Prop, and |=
+   including FLOAT .
+   --- Create State for the sensor: < state , LOW , HIGH >
+   sort Sensorstatus . 
+   ops ok low high : -> Sensorstatus [ctor] .
+   op Sensorstate : Sensorstatus Float Float -> State [ctor] . 
+endm)
+
+(mod WATERSENSOR is
+   pr WATER || SENSOR . 
+   including SATISFACTION .  --- declares State, Prop, and |=
+   including FLOAT .
+ 
+   vars WT DC SLow SHigh : Float .
+
+   --- Rules to change sensor status based on Water Temperature
+   crl [ok_to_low] : < Waterstate(WT, DC) , Sensorstate(ok, SLow, SHigh) > => 
+		     < Waterstate(WT, DC) , Sensorstate(low, SLow, SHigh) >
+		if (WT < SLow) . 
+
+   crl [ok_to_high] : < Waterstate(WT, DC) , Sensorstate(ok, SLow, SHigh) > => 
+		      < Waterstate(WT, DC) , Sensorstate(high, SLow, SHigh) >
+		if (WT > SHigh) . 
+
+   crl [low_to_ok] : < Waterstate(WT, DC) , Sensorstate(low, SLow, SHigh) > => 
+		     < Waterstate(WT, DC) , Sensorstate(ok, SLow, SHigh) >
+		if (WT >= SLow) . 
+
+   crl [high_to_ok] : < Waterstate(WT, DC) , Sensorstate(high, SLow, SHigh) > => 
+		      < Waterstate(WT, DC) , Sensorstate(ok, SLow, SHigh) >
+		if (WT <= SHigh) . 
+endm)
+
+(mod BURNER is 
+   including SATISFACTION .  --- declares State, Prop, and |=
+   including FLOAT .
+ 
+   --- Create State for the burner: < On/Off , Delta Heat per tick >
+   sort Burnerstatus . 
+   ops on off : -> Burnerstatus [ctor] .
+   op Burnerstate : Burnerstatus Float -> State [ctor] . 
+
+   vars DH3 : Float .
+
+   --- If sensor indicates that temperature changed range, we change status of the Burner
+   --- accordingly. Note that if we go low_to_high e high_to_low
+   --- there is no ability to switch the burner. This could happen
+   --- in a tight range. 
+   rl [ok_to_low] : Burnerstate(off, DH3) => Burnerstate(on, DH3) .
+
+   rl [ok_to_high] : Burnerstate(on, DH3) => Burnerstate(off, DH3) .
+endm)
+
+
+(mod WATERSENSORBURNER is
+   pr WATERSENSOR || BURNER . 
+   including SATISFACTION .  --- declares State, Prop, and |=
+   including FLOAT . 
+
+   vars WT SLow SHigh DH DC : Float .
+   var SSignal : Sensorstatus . 
+
+   --- tick burner on
+   rl [tick_lock_A]: < < Waterstate(WT, DC) , Sensorstate(SSignal, SLow, SHigh) > , Burnerstate(on, DH) > => 
+	      < < Waterstate(WT + ((100.0 - WT) * DH), DC) , Sensorstate(SSignal, SLow, SHigh) > , Burnerstate(on, DH) > .
+   ----tick burner off (we need to make sure the label is here for all cases
+   rl [tick_lock_A]: < < Waterstate(WT, DC) , Sensorstate(SSignal, SLow, SHigh) > , Burnerstate(off, DH) > => 
+	      < < Waterstate(WT, DC) , Sensorstate(SSignal, SLow, SHigh) > , Burnerstate(off, DH) > .
+
+endm)
+
+(mod CLOCK is
+   including SATISFACTION .  --- declares State, Prop, and |=.
+   including NAT .
+   subsort Nat < State .
+   var ClockCounter : Nat .
+   rl [tick_lock_A] : ClockCounter => ClockCounter + 1 .
+endm)
+
+(mod CLOCKEDWATERSENSORBURNER is
+    pr WATERSENSORBURNER || CLOCK .
+
+    op init : -> State .
+    eq init = < < < Waterstate(75.0, 0.04) , Sensorstate(ok, 60.0, 90.0) > , Burnerstate(on,0.5) > , 0 >  .
+endm)
+
+(smod CLOCKEDWATERSENSORBURNER-STFLOAT is
+  strat temporal : @ State .
+  sd temporal := tick_lock_A ; tick_lock_B . 
+
+  strat atemporal : @ State .
+  sd atemporal := ( ok_to_low | ok_to_high | low_to_ok | high_to_ok ) .
+
+  strat evolvefull : @ State .
+  sd evolvefull := (atemporal ? (atemporal) *  : temporal)+ . 
+
+  strat evolveverbose : @ State .
+  sd evolveverbose := (atemporal ? atemporal !  : temporal)+ . 
+
+  strat evolve : @ State .
+  sd evolve := (atemporal ! ; temporal)+ . 
+
+endsm)
+
+(srew init using evolveverbose .)(next .)(next .)(next .)(next .)(next .)(next .)(next .)(next .)(next .)(next .)(next .)(next .)(next .)(next .)(next .)(next .)(next .)(next .)(next .)(next .)(next .)(next .)(next .)(next .)(next .)(next .)(next .)(next .)(next .)(next .)(next .)(next .)(next .)

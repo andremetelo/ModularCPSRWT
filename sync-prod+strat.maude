@@ -1,0 +1,2319 @@
+***(
+  Full Maude Synchronous product extension April 2016.
+  Authors: Óscar Martín Sánchez, José Alberto Verdejo and Narciso Martí-Oliet
+  Universidad Complutense de Madrid
+  http://maude.sip.ucm.es/syncprod/
+
+  Strategy language version 2.6
+  Author: Alberto Verdejo
+  Universidad Complutense de Madrid
+  http://maude.sip.ucm.es/strategies/
+
+  Synchronous product + Strategy language
+  Author: Christiano Braga
+  Universidade Federal Fluminense
+  http://github.com/ChristianoBraga/SPSL
+)
+
+*** SYNCHRONOUS PRODUCT FULL MAUDE EXTENSION
+*** BEGIN
+    
+***************************    
+*** maude-tools/tools.maude
+    
+fmod TOOLS is
+   pr QID .
+   pr STRING .
+   pr META-LEVEL .
+
+--- Variable declarations.
+--------------------------
+
+   var M : Module .
+   var Str : String .
+   vars Q Q' Q1 Q2 Q3 : Qid .
+   var H H' : Header .
+   vars SS SS' : SortSet .
+   var SSDS SSDS' : SubsortDeclSet .
+   vars OPDS OPDS' : OpDeclSet .
+   var MAS MAS' : MembAxSet .
+   var EQS EQS' : EquationSet .
+   var RLS RLS' : RuleSet .
+   var I : Import .
+   vars IL IL' IL'' : ImportList .
+   var S : Sort .
+
+--- Operations on Qids.
+-----------------------
+
+   op _+_ : Qid String -> Qid .
+   --- 'a + "b" = 'ab
+   eq Q + Str = qid(string(Q) + Str) .
+
+   op _+_ : String Qid -> Qid .
+   --- "a" + 'b = 'ab
+   eq Str + Q = qid(Str + string(Q)) .
+
+   op concat3 : Qid Qid Qid -> Qid .
+   --- concat3('a, 'b, 'c) = 'abc
+   eq concat3(Q1, Q2, Q3) = qid(string(Q1) + string(Q2) + string(Q3)) .
+
+   --- From Bae: upTerm for Qid (default function is buggy in this case)
+   op upQid : Qid ~> Constant .
+   eq upQid(Q) = qid("'" + string(Q) + ".Qid") .
+
+
+
+--- Operations on modules.
+--------------------------
+
+   op setModName : Module Qid -> Module .
+   eq setModName(mod Q is IL sorts SS . SSDS OPDS MAS EQS RLS endm, Q') =
+      (mod Q' is IL sorts SS . SSDS OPDS MAS EQS RLS endm) .
+
+
+   op remDuplDecl : Module -> Module .
+
+   --- Remove duplicates for ImportList and SortSet. Other elements are treated as sets in the prelude.
+
+   eq remDuplDecl(mod H is IL sorts SS . SSDS OPDS MAS EQS RLS endm) =
+      mod H is remDupl(IL) sorts remDupl(SS) . SSDS OPDS MAS EQS RLS endm .
+   op remDupl : ImportList -> ImportList .
+   eq remDupl(IL I IL' I IL'') = remDupl(IL I IL' IL'') .
+   eq remDupl(IL) = IL [owise] .
+   op remDupl : SortSet -> SortSet .
+   eq remDupl(S ; S ; SS) = remDupl(S ; SS) .
+   eq remDupl(SS) = SS [owise] .
+
+   op addOps : Module OpDeclSet -> Module .
+   eq addOps(mod H is IL sorts SS . SSDS OPDS MAS EQS RLS endm, OPDS') =
+       (mod H is IL sorts SS . SSDS OPDS OPDS' MAS EQS RLS endm) .
+
+   op addSorts : Module SortSet -> Module .
+   eq addSorts(mod H is IL sorts SS . SSDS OPDS MAS EQS RLS endm, SS') =
+       (mod H is IL sorts SS ; SS' . SSDS OPDS MAS EQS RLS endm) .
+
+   op add_to_ : Module Module -> Module .
+   eq add (fmod H is IL sorts SS . SSDS OPDS MAS EQS endfm) to (mod H' is IL' sorts SS' . SSDS' OPDS' MAS' EQS' RLS' endm) =
+      (mod H' is remDupl(IL' IL) sorts remDupl(SS' ; SS) . SSDS' SSDS OPDS' OPDS MAS' MAS EQS' EQS RLS' endm) .
+
+   op renameMod : Qid Qid -> Module .
+   eq renameMod(Q1, Q2) =
+      (mod 'RENAME is
+          including 'BOOL . protecting 'QID . protecting 'META-LEVEL .
+          sorts none .
+          none
+          none
+          none
+          none
+          rl upQid(Q1) => upQid(Q2) [none] .
+       endm) .
+
+   op rename : Module Qid Qid -> Module .
+   eq rename(M, Q1, Q2) = downTerm(getTerm(metaRewrite(renameMod(Q1, Q2), upTerm(M), unbounded)), M) .
+
+   op renameSortMod : Qid Qid -> Module .
+   eq renameSortMod(Q1, Q2) =
+      (mod 'RENAME-SORT is
+          including 'BOOL . protecting 'QID . protecting 'STRING . protecting 'META-LEVEL .
+          sorts none .
+          none
+          none
+          none
+          none
+          rl upQid(Q1) => upQid(Q2) [none] .
+          crl 'V:Variable => 'qid['_+_['string['getName['V:Variable]], '_+_['":".String, 'string[upQid(Q2)]]]]
+             if '_==_['getType['V:Variable], upQid(Q1)] = 'true.Bool [none] .
+          crl 'C:Constant => 'qid['_+_['string['getName['C:Constant]], '_+_['".".String, 'string[upQid(Q2)]]]]
+             if '_==_['getType['C:Constant], upQid(Q1)] = 'true.Bool [none] .
+          rl upQid(qid("[" + string(Q1) + "]")) => upQid(qid("[" + string(Q2) + "]")) [none] .
+       endm) .
+
+   op renameSort : Module Qid Qid -> Module .
+   eq renameSort(M, Q1, Q2) = downTerm(getTerm(metaRewrite(renameSortMod(Q1, Q2), upTerm(M), unbounded)), M) .
+endfm
+
+
+---(
+The idea of using rewriting to rename parts of a module (that is, of a term of type Module) is fun. It is difficult,
+because the implementation mixes three levels, but it works as it stands. However, it has some drawbacks. And there
+are alternatives.
+
+The drawback is that it does not look inside imported modules. The simple solution to this is to use upModule with true,
+so that we get from the start a flat module. I have not tried it. I am afraid that many identifiers will clash when
+making the sync product of two flattened modules.
+
+What are the alternatives? First, Full Maude includes the function called applyMapsToModule, that does exactly what
+I need. It seems to be carefully coded. It seems not to look inside imported modules. It takes two modules as arguments;
+when calling the function, the two modules are the same, but the first is the flattened version. This is the one that
+gets modified and returned. The second, top version of the module is used to resolve matches and so. For instance:
+
+mod ORIG is
+   ...
+endm
+
+mod RENAMING is
+   pr VIEW-MAP-SET-APPL-ON-UNIT .
+   pr META-LEVEL .
+
+   ops OrigFlat OrigTop M : -> Module .
+   eq OrigTop = upModule('ORIG, false) .
+   eq OrigFlat = upModule('ORIG, true) .
+   eq M = applyMapsToModule(sort 'A to 'AA, OrigTop, OrigFlat) .
+endm
+
+The other alternative is to give the user an enriched upModule function that performs the renaming using Maude's
+built-in construct:
+
+mod RENAMED is
+   protecting ORIG * (sort S1 to S2, op O1 to O2) .
+endm
+
+And then using upModule on this RENAMED module.
+
+In all three alternatives, it seems that I need to use the flattened version of the module for proper working...
+)
+
+--- The given initial composed state may not satisfy the membership condition. I am accepting whatever initial state is
+--- given, and not testing it. In all this code, I'm not considering the possibility of empty paths. So this can stay as it is.
+
+
+*******************    
+*** sync-prod.maude
+
+fmod SYNC-PROD is
+   pr QID .
+   pr META-LEVEL .  --- META-LEVEL imports QID-SET with renaming (op empty to none, op _,_ to _;_)
+   pr TOOLS .
+   pr SATISFACTION .
+
+--- Vars
+   vars M M' M'' lM rM : Module .
+   var Q : Qid .
+   vars lIL rIL : ImportList .
+   vars lSS rSS : SortSet .
+   vars lSSDS rSSDS : SubsortDeclSet .
+   vars lOPDS rOPDS : OpDeclSet .
+   vars lMAS rMAS : MembAxSet .
+   var ODS : OpDeclSet .
+   vars lEQS rEQS : EquationSet .
+   vars RLS lRLS rRLS : RuleSet .
+   vars T T1 T2 : Term .
+   vars AS lAS rAS : AttrSet .
+   vars R R1 R2 : Rule .
+   var Cond : Condition .
+   vars stateName modelsName : Qid .
+   vars lState rState : Qid .
+   vars lModels rModels : Qid .
+   vars lSt rSt : Qid .
+   vars lMod rMod : Qid .
+   vars P L : Qid .  --- representing a Prop identifier and a rule label, resp.
+   vars lPP rPP PP LL : QidSet .  --- represeting sets of Prop identifiers and rule labels, resp.
+   vars lH rH : Header .
+
+--- Constants
+   op %pair : -> Qid .
+   eq %pair = '<_`,_> .
+
+--- Functions
+   op syncprod : Module Module -> Module .
+   eq syncprod(lM, rM) = syncprod(prepare(lM), prepare(rM), commonProps(lM, rM), commonRuleLabels(lM, rM)) .
+
+   op syncprod : Module Module QidSet QidSet -> Module .
+   ceq syncprod(lM, rM, PP, LL) = remDuplDecl(
+      mod qid(string(getName(lM)) + "||" + string(getName(rM))) is
+         lIL rIL
+         protecting 'QID .
+         including 'BOOL .
+         protecting 'QID-SET .
+
+         sorts lSS ; rSS ; 'State ; 'Prop .
+
+         lSSDS rSSDS
+
+         lOPDS rOPDS
+         op '_|=_ : 'State 'Prop -> 'Bool [frozen (1 2)].
+         op %pair : lState rState -> '`[State`] [ctor] .
+         op 'sp : 'Bool 'Bool -> 'Bool [assoc comm] .
+
+         lMAS rMAS
+         (cmb %pair["lS:" + lState, "rS:" + rState] : 'State
+            if agree-on(PP, "lS:" + lState, "rS:" + rState, lModels, rModels) [none] .)
+
+         lEQS rEQS
+         eqsForModels(getProps(lOPDS), lState, lModels, getProps(rOPDS), rState, rModels, PP)
+         (ceq 'sp['B1:Bool,'B2:Bool] = 'B1:Bool
+             if '_or_['_==_['B1:Bool,'true.Bool], '_==_['B1:Bool,'false.Bool]] = 'true.Bool [none] .)
+
+         syncprod(lRLS, lState, rRLS, rState, LL)
+      endm)
+      if mod lH is lIL sorts lSS . lSSDS lOPDS lMAS lEQS lRLS endm := lM
+      /\ mod rH is rIL sorts rSS . rSSDS rOPDS rMAS rEQS rRLS endm := rM
+      /\ lState := getStateName(lM) /\ rState := getStateName(rM)
+      /\ lModels := getModelsName(lM) /\ rModels := getModelsName(rM) .
+
+   op eqsForModels : QidSet Qid Qid QidSet Qid Qid QidSet -> EquationSet .
+   eq eqsForModels(lPP, lSt, lMod, rPP, rSt, rMod, P ; PP) =
+      (eq '_|=_[%pair["lS:" + lSt, "rS:" + rSt], P] =
+          'sp[lMod["lS:" + lSt, P], rMod["rS:" + rSt, P]] [none] .)
+      eqsForModels(filterOut(lPP, P), lSt, lMod, filterOut(rPP, P), rSt, rMod, PP) .
+   eq eqsForModels(lPP, lSt, lMod, rPP, rSt, rMod, none) =
+      eqsForModelsLeft(lPP, lSt, lMod, rSt) eqsForModelsRight(rPP, rSt, rMod, lSt) .
+
+   op eqsForModelsLeft : QidSet Qid Qid Qid -> EquationSet .
+   eq eqsForModelsLeft(P ; lPP, lSt, lMod, rSt) = 
+      (eq '_|=_[%pair["lS:" + lSt, "rS:" + rSt], P] = lMod["lS:" + lSt, P] [none] .)
+      eqsForModelsLeft(lPP, lSt, lMod, rSt) .
+   eq eqsForModelsLeft(none, lSt, lMod, rSt) = none .
+
+   op eqsForModelsRight : QidSet Qid Qid Qid -> EquationSet .
+   eq eqsForModelsRight(P ; rPP, rSt, rMod, lSt) = 
+      (eq '_|=_[%pair["lS:" + lSt, "rS:" + rSt], P] = rMod["rS:" + rSt, P] [none] .)
+      eqsForModelsRight(rPP, rSt, rMod, lSt) .
+   eq eqsForModelsRight(none, rSt, rMod, lSt) = none .
+
+   op filterOut : QidSet Qid -> QidSet .
+   eq filterOut(P ; PP, P) = PP .
+   eq filterOut(PP, P) = PP [owise] .
+
+   op agree-on : QidSet Qid Qid Qid Qid -> Condition .
+   eq agree-on(none, lSt, rSt, lMod, rMod) = nil .
+   eq agree-on(P ; PP, lSt, rSt, lMod, rMod) = agree-on-one(P, lSt, rSt, lMod, rMod)
+                                            /\ agree-on(PP, lSt, rSt, lMod, rMod) .
+
+   op agree-on-one : Qid Qid Qid Qid Qid -> Condition .
+   eq agree-on-one(P, lSt, rSt, lMod, rMod) =
+      ('_or_['_and_['_==_[lMod[lSt, P], 'true.Bool], '_==_[rMod[rSt, P], 'false.Bool]],
+             '_and_['_==_[lMod[lSt, P], 'false.Bool], '_==_[rMod[rSt, P], 'true.Bool]]]
+      = 'false.Bool) .
+
+   op commonProps : Module Module -> QidSet .
+   eq commonProps(lM, rM) = intersection(getProps(getOps(lM)), getProps(getOps(rM))) .
+
+   op getProps : OpDeclSet -> QidSet .
+   eq getProps(op Q : nil -> 'Prop [AS] . ODS) = (Q + ".Prop") ; getProps(ODS) .
+   eq getProps(ODS) = none [owise] .
+
+   op commonRuleLabels : Module Module -> QidSet .
+   eq commonRuleLabels(lM, rM) = intersection(getRuleLabels(getRls(lM)), getRuleLabels(getRls(rM))) .
+
+   op getRuleLabels : RuleSet -> QidSet .
+   eq getRuleLabels(R RLS) = getRuleLabel(R) ; getRuleLabels(RLS) .
+   eq getRuleLabels(RLS) = none [owise] .
+
+   op getRuleLabel : Rule -> Qid .
+   eq getRuleLabel(rl T1 => T2 [label(Q) AS] .) = Q .
+   eq getRuleLabel(crl T1 => T2 if Cond [label(Q) AS] .) = Q .
+
+   op getRuleLHS : Rule -> Term .
+   eq getRuleLHS(rl T1 => T2 [label(Q) AS] .) = T1 .
+   eq getRuleLHS(crl T1 => T2 if Cond [label(Q) AS] .) = T1 .
+
+   op getRuleRHS : Rule -> Term .
+   eq getRuleRHS(rl T1 => T2 [label(Q) AS] .) = T2 .
+   eq getRuleRHS(crl T1 => T2 if Cond [label(Q) AS] .) = T2 .
+
+   op getRuleCond : Rule -> Condition .
+   eq getRuleCond(rl T1 => T2 [label(Q) AS] .) = nil .
+   eq getRuleCond(crl T1 => T2 if Cond [label(Q) AS] .) = Cond .
+
+   op getRuleAttrs : Rule -> AttrSet .  --- Excluding label
+   eq getRuleAttrs(rl T1 => T2 [label(Q) AS] .) = AS .
+   eq getRuleAttrs(crl T1 => T2 if Cond [label(Q) AS] .) = AS .
+
+   op syncprod : RuleSet Qid RuleSet Qid QidSet -> RuleSet .
+   eq syncprod(lRLS, lSt, rRLS, rSt, L ; LL) = syncManyMany(filter(lRLS, L), filter(rRLS, L))
+                                               syncprod(filterOut(lRLS, L), lSt, filterOut(rRLS, L), rSt, LL) .
+   eq syncprod(lRLS, lSt, rRLS, rSt, none) = noSyncLeft(lRLS, rSt) noSyncRight(rRLS, lSt) .
+
+   op filter : RuleSet Qid -> RuleSet .
+   eq filter(R RLS, L) = if getRuleLabel(R) == L then R else none fi filter(RLS, L)  .
+   eq filter(none, L) = none .
+
+   op filterOut : RuleSet Qid -> RuleSet .
+   eq filterOut(R RLS, L) = if getRuleLabel(R) =/= L then R else none fi filterOut(RLS, L)  .
+   eq filterOut((none).RuleSet, L) = none .
+
+   op syncManyMany : RuleSet RuleSet -> RuleSet .
+   eq syncManyMany(R lRLS, rRLS) = syncOneMany(R, rRLS) syncManyMany(lRLS, rRLS) .
+   eq syncManyMany(none, rRLS) = none .
+
+   op syncOneMany : Rule RuleSet -> RuleSet .
+   eq syncOneMany(R1, R2 rRLS) = syncOneOne(R1, R2) syncOneMany(R1, rRLS) .
+   eq syncOneMany(R1, none) = none .
+
+   op syncOneOne : Rule Rule -> Rule .
+   eq syncOneOne(R1, R2) =
+      (crl %pair[getRuleLHS(R1), getRuleLHS(R2)] => %pair[getRuleRHS(R1), getRuleRHS(R2)]
+         if getRuleCond(R1) /\ getRuleCond(R2) /\ %pair[getRuleRHS(R1), getRuleRHS(R2)] : 'State [label(getRuleLabel(R1)) getRuleAttrs(R1) getRuleAttrs(R2)] .) .
+
+   op noSyncLeft : RuleSet Qid -> RuleSet .
+   eq noSyncLeft(R RLS, rSt) = 
+      (crl %pair[getRuleLHS(R), "S:" + rSt] => %pair[getRuleRHS(R), "S:" + rSt]
+         if getRuleCond(R) /\ %pair[getRuleRHS(R), "S:" + rSt] : 'State [label(getRuleLabel(R)) getRuleAttrs(R)] .)
+      noSyncLeft(RLS, rSt) .
+   eq noSyncLeft(none, rSt) = none .
+
+   op noSyncRight : RuleSet Qid -> RuleSet .
+   eq noSyncRight(R RLS, lSt) = 
+      (crl %pair["S:" + lSt, getRuleLHS(R)] => %pair["S:" + lSt, getRuleRHS(R)]
+         if getRuleCond(R) /\ %pair["S:" + lSt, getRuleRHS(R)] : 'State [label(getRuleLabel(R)) getRuleAttrs(R)] .)
+      noSyncRight(RLS, lSt) .
+   eq noSyncRight(none, lSt) = none .
+
+   op getStateName : Module -> Qid .
+   --- We are always assuming a sort State in the product and ModNameState in the operand systems.
+   --- Otherwise, the names of this sort in each system should be a parameter for syncprod.
+   eq getStateName(M) = getName(M) + "State" .
+
+   op getModelsName : Module -> Qid .
+   --- We are always assuming an op _|=_ in the product and _ModName|=_ in the operand systems.
+   --- Otherwise, the names of this op in each system should be a parameter for syncprod.
+   eq getModelsName(M) = ("_" + getName(M)) + "|=_" .
+
+   op prepare : Module -> Module .
+   --- Renames 'State to 'ModNameState, and '_|=_ to '_ModName|=_
+   ceq prepare(M) = M''
+      if M' := renameSort(M, 'State, getStateName(M))
+      /\ M'' := rename(M', '_|=_, getModelsName(M)) .
+endfm
+
+******************
+*** mod-expr.maude
+
+***( FOR-GRANTED list:
+     * All modules involved are system modules (SModule).
+)
+
+fmod SYNCPROD-MODEXPR-SIGN is
+   ex FULL-MAUDE-SIGN .
+   op _||_ : @ModExp@ @ModExp@ -> @ModExp@ [assoc prec 42] .
+endfm
+
+fmod SYNCPROD-EXPR is
+   pr INST-EXPR-EVALUATION .  --- from full-maude
+   pr EVALUATION .  --- from full-maude
+   pr MOD-EXP-PARSING .  --- from full-maude
+   pr MOD-EXPR .  --- from full-maude
+   pr SYNC-PROD .
+   pr UNION-EXPR .
+
+   vars ME ME1 ME2 ME3 ME4 : ModuleExpression .
+   var PDL : ParameterDeclList .
+   vars DB DB1 DB2 DB3 : Database .
+   vars M M1 M2 U U' DM : Module .
+   vars T1 T2 T3 : Term .
+   var Q : Qid .
+   var DT : Default{Term} .
+   var VEPS : Set{Tuple{ViewExp,ViewExp}} .
+   vars MNS1 MNS2 MNS3 MNS4 MNS5 : Set{ModuleName} .
+   vars VES1 VES2 : Set{ViewExp} .
+   var MIS : Set{ModuleInfo} .
+   var VIS : Set{ViewInfo} .
+   var QIL : QidList .
+   var VDS : OpDeclSet .
+ 
+   op _||_ : ModuleExpression ModuleExpression -> ModuleExpression [ctor] .
+
+   ceq evalModExp(ME1 || ME2, PDL, DB) =
+      if unitInDb(ME1 || ME2, DB) or-else not (unitInDb(ME1, DB) and-then unitInDb(ME2, DB))
+         then < DB2 ; ME3 || ME4 > 
+         else < evalModule(setName(syncprod(M1,M2), ME1 || ME2), none, DB2) ; ME3 || ME4 >
+      fi
+      if < DB1 ; ME3 > := evalModExp(ME1, PDL, DB)
+      /\ < DB2 ; ME4 > := evalModExp(ME2, PDL, DB1)
+      /\ M1 := getFlatModule(ME3, DB2)
+      /\ M2 := getFlatModule(ME4, DB2) .
+
+   eq parseModExp('_||_[T1, T2]) = parseModExp(T1) || parseModExp(T2) .
+
+   eq solveUps('upModule['_||_[T1, T2]], DB) = solveUpsModExp('upModule['_||_[T1, T2]], DB) .
+   eq solveUps('upTerm['_+_[T1, T2], 'bubble[T3]], DB) = solveUpsModExp('upTerm['_||_[T1, T2], 'bubble[T3]], DB) .
+
+   eq labelInModExp(Q, ME1 || ME2) = labelInModExp(Q, ME1) or-else labelInModExp(Q, ME2) .
+
+   eq header2Qid(ME1 || ME2) = qidList2Qid(header2QidList(ME1) '|| header2QidList(ME2)) .
+   eq header2QidList(ME1 || ME2) = (header2QidList(ME1) '|| header2QidList(ME2)) .
+
+   eq prepModExp(ME1 || ME2, VEPS) = prepModExp(ME1, VEPS) || prepModExp(ME2, VEPS) .
+
+   eq setUpModExpDeps(ME1 || ME2, DB) = setUpModExpDepsAux(ME1 || ME2, ME1 || ME2, DB) .
+
+---   op setUpModExpDepsAux : ModuleExpression ModuleExpression Database -> Database .
+   eq setUpModExpDepsAux(ME, ME1 || ME2, DB) = setUpModExpDepsAux(ME, ME1, setUpModExpDepsAux(ME, ME2, DB)) .
+   eq setUpModExpDepsAux(ME, ME1,
+      db(< ME1 ; DT ; U ; U' ; M ; VDS ; MNS1      ; VES1 > MIS, ME1 MNS2, VIS, VES2, MNS3, MNS4, MNS5, QIL)) =
+      db(< ME1 ; DT ; U ; U' ; M ; VDS ; MNS1 . ME ; VES1 > MIS, ME1 MNS2, VIS, VES2, MNS3, MNS4, MNS5, QIL) .
+---      [owise] .
+   eq setUpModExpDepsAux(ME, ME1,
+      db(< ME1 ; DM ; U ; U' ; M ; VDS ; MNS1      ; VES1 > MIS, ME1 MNS2, VIS, VES2, MNS3, MNS4, MNS5, QIL)) =
+      db(< ME1 ; DM ; U ; U' ; M ; VDS ; MNS1 . ME ; VES1 > MIS, ME1 MNS2, VIS, VES2, MNS3, MNS4, MNS5, QIL) .
+---  [owise] .
+
+   eq setUpModExpDepsAux(ME, ME1, DB) =
+      warning(DB, '\r 'Error: '\o 'Module header2QidList(ME1) 'not 'in 'database. '\n)
+	[owise] .
+
+endfm
+
+****************
+*** fm-extension
+
+set include BOOL off .
+
+fmod SYNCPROD-SIGN is
+   pr SYNCPROD-MODEXPR-SIGN .
+endfm
+
+fmod SYNCPROD-META-SIGN is
+   pr META-LEVEL .
+   pr META-FULL-MAUDE-SIGN .
+   pr UNIT .
+   op SYNCPROD-GRAMMAR : -> FModule .
+   eq SYNCPROD-GRAMMAR = addImports((including 'SYNCPROD-SIGN .), GRAMMAR) .
+endfm
+
+fmod SYNCPROD-BANNER is
+   pr STRING .
+   op syncprod-banner : -> String .
+   --- eq syncprod-banner = "Synchronous product available - Apr 2016." .
+   eq syncprod-banner = "Full Maude Synchronous product extension April 2016." .
+endfm
+
+mod FULL-MAUDE+SYNC-PROD is
+   pr SYNCPROD-META-SIGN .
+   ex LOOP-MODE * (sort State to FMSPState) .
+   ex DATABASE-HANDLING .
+   pr BANNER .
+   pr SYNCPROD-BANNER .
+   pr SYNCPROD-EXPR .
+
+   subsort Object < FMSPState .
+
+   op o : -> Oid .
+   op init : -> System .
+
+   sort SyncProdDatabaseClass .
+   subsort SyncProdDatabaseClass < DatabaseClass .
+   op SyncProdDatabase : -> SyncProdDatabaseClass [ctor] .
+
+   var Atts : AttributeSet .
+   var X@SyncProdDatabase : SyncProdDatabaseClass .
+   var O : Oid .
+   var DB : Database .
+   var ME : Header .
+   var QI : Qid .
+   vars QIL QIL' QIL'' : QidList .
+   var TL : TermList .
+
+   rl [init] :
+      init
+      =>
+      [nil,
+       < o : SyncProdDatabase |
+                db : initialDatabase,
+                input : nilTermList,
+                output : nil,
+                default : 'CONVERSION >,
+       ('\t string2qidList(syncprod-banner) '\n)
+      ] .
+
+   rl [in] :
+      [QI QIL,
+       < O : X@SyncProdDatabase |
+                db : DB,
+                input : nilTermList,
+                output : nil,
+                default : ME,
+                Atts >,
+       QIL']
+      =>
+      if metaParse(SYNCPROD-GRAMMAR, QI QIL, '@Input@) :: ResultPair
+      then [nil,
+            < O : X@SyncProdDatabase |
+                     db : DB,
+                     input : getTerm(metaParse(SYNCPROD-GRAMMAR,
+                                               QI QIL,
+                                               '@Input@)),
+                     output : nil,
+                     default : ME,
+                     Atts >,
+            QIL']
+      else [nil,
+            < O : X@SyncProdDatabase |
+                     db : DB,
+                     input : nilTermList,
+                     output : ('\r 'Warning: printSyntaxError(metaParse(SYNCPROD-GRAMMAR, QI QIL, '@Input@), QI QIL)
+                               '\n '\r 'Error: '\o 'No 'parse 'for 'input. '\n),
+                     default : ME,
+                     Atts >,
+            QIL']
+      fi .
+
+   rl [out] :
+      [QIL,
+       < O : X@SyncProdDatabase |
+                db : DB,
+                input : TL,
+                output : (QI QIL'),
+                 default : ME,
+                Atts >,
+       QIL'']
+      =>
+      [QIL,
+       < O : X@SyncProdDatabase |
+                db : DB,
+                input : TL,
+                output : nil,
+                default : ME,
+                Atts >,
+       (QI QIL' QIL'')] .
+endm
+
+*** END    
+*** SYNCHRONOUS PRODUCT FULL MAUDE EXTENSION
+
+    
+*** STRATEGY LANGUAGE
+*** BEGIN
+--- loop init .
+
+--- load maude-strat-stand-alone
+---- trace exclude FULL-MAUDE .
+
+---- set show loop stats on .
+---- set show loop timing on .
+---- set show advisories on .
+
+
+----                          Maude Strategy Language specification version 2.6
+
+---- last modification: February 27, 2011
+---- author: Alberto Verdejo
+
+
+fmod STRATEGIES-SYNTAX is
+  inc META-LEVEL .
+  
+  sorts BasicStrat Strat Search .
+  subsorts BasicStrat < Strat . 
+  
+  sorts BasicTest Test .
+  subsorts BasicTest < Test < Strat .
+
+  sorts TermStrat TermStratList .
+  subsort TermStrat < TermStratList .
+  
+  op nilTL : -> TermList .
+    
+  op _[_] : Qid Substitution -> BasicStrat .
+  op _[_]{_} : Qid Substitution SearchList -> BasicStrat .
+  
+  op match : Term EqCondition -> BasicTest .
+  op xmatch : Term EqCondition -> BasicTest .
+  op amatch : Term EqCondition -> BasicTest .
+  
+  ops idle fails : -> Strat . 
+  op top : BasicStrat -> Strat .
+  op or : Strat Strat -> Strat .  *** _|_
+  op seq : Strat Strat -> Strat .  *** _;_
+  op if : Strat Strat Strat -> Strat [strat (0)] .
+  op orelse : Strat Strat -> Strat .
+  op not : Strat -> Strat .
+  op try : Strat -> Strat .
+  op test : Strat -> Strat .
+  op _* : Strat -> Strat .
+  op _+ : Strat -> Strat .
+  op _! : Strat -> Strat .
+  op call : Term -> Strat . *** strat call
+  op one : Strat -> Strat . *** NOT DOCUMENTED 
+  op matchrew : Term EqCondition TermStratList -> Strat .
+  op xmatchrew : Term EqCondition TermStratList -> Strat .
+  op amatchrew : Term EqCondition TermStratList -> Strat .
+  
+  op _using_ : Term Strat -> TermStrat .  
+  op nilTSL : -> TermStratList .
+  op _,_ : TermStratList TermStratList -> TermStratList [assoc id: nilTSL] .
+      
+  op bfs : Strat -> Search .  
+ 
+  sort SearchList .
+  subsort Search < SearchList .
+  op nil : -> SearchList .
+  op __ : SearchList SearchList -> SearchList [ctor assoc id: nil] .
+    
+endfm 
+
+fmod STRATEGIES-DEFINITIONS is
+  inc STRATEGIES-SYNTAX .
+
+  sorts StratOp StratDef SSModule .
+  subsort StratOp StratDef < SSModule .
+  
+  op (strat_:_.) : Qid TypeList -> StratOp .
+  
+  op (csd_:=_if_.) : Term Strat EqCondition -> StratDef [prec 20] .
+  
+  op none : -> SSModule .
+  op __ : SSModule SSModule -> SSModule [prec 30 assoc id: none] .  
+endfm
+
+fmod AUX-OPERATIONS is
+  inc STRATEGIES-DEFINITIONS . ***META-LEVEL .
+  pr UNIT .
+  
+  op subst : Module Term Substitution -> Term .
+  op subst2 : Module Term Substitution -> Term .
+  op subst3 : Module TermList Assignment -> TermList .
+  op subst4 : Module TermList Assignment -> TermList .
+  op substStrat : Module Strat Substitution -> Strat .
+  op substStrat2 : Module Strat Assignment -> Strat .
+  op substSubst : Module Substitution Assignment -> Substitution .
+  op substCond : Module Condition Assignment -> Condition .
+  op substTSL : Module TermStratList Assignment -> TermStratList .
+  op substSL : Module SearchList Assignment -> SearchList .
+  op replace : Module Context Term -> Term . *** replace(C[], T) = C[T]
+  op replace : Context Term -> Term . *** replace(C[], T) = C[T]
+  sort EqCondResult .
+  op {_,_} : Bool Substitution -> EqCondResult [ctor] .  
+  op solveEqCond : Module EqCondition -> EqCondResult .
+  op extendStrat : Module SSModule -> Module .
+  op _isStrat_ : Qid Module -> Bool .
+  op _isStrat_ : Qid OpDeclSet -> Bool .
+  op def : Module Strat SSModule -> Strat .
+  op def2 : Module Term SSModule Nat Strat -> Strat .
+  
+  var  N : Nat .
+  vars T T' T'' T1 T2 : Term .
+  var  A : Assignment .
+  var  Sb : Substitution .
+  var  C : Constant .
+  vars V V' : Variable .
+  vars F L : Qid .
+  vars TL TL' : NeTermList .
+  var  Ty : Type .
+  var  TyL : TypeList .
+  var  CTL : NeCTermList .
+  var  M : Module .
+  var  SSM : SSModule .
+  var  ECO : EqCondition .
+  var  CO : Condition .
+  vars RS RS' : RuleSet .
+  var  AS : AttrSet .
+  var  Q : Qid .
+  var  S : Sort .
+  var  OPDS : OpDeclSet .
+  vars RLS RLS' : RuleSet .
+  var  CX : Context .
+  vars E E' E'' : Strat .
+  vars TSL TSL' : TermStratList .
+  vars SL SL' : SearchList .
+  
+  ceq solveEqCond(M, ECO) = {false, none}
+      if (noMatch).Substitution? := metaMatch(M, '#:Bool, '#:Bool, ECO, 0) .
+  ceq solveEqCond(M, ECO) = {true, Sb}
+      if Sb := metaMatch(M, '#:Bool, '#:Bool, ECO, 0) .
+    
+  eq extendStrat(M, none) = addSorts('Strat, M) .
+  eq extendStrat(M, (strat Q : TyL .) SSM) =
+     extendStrat(addOps(op Q : TyL -> 'Strat [none] ., M), SSM) .
+  eq extendStrat(M, (csd T := E if ECO .) SSM) = extendStrat(M, SSM) .
+  
+  eq Q isStrat M = Q isStrat getOps(M) .
+  
+  eq Q isStrat (op Q : TyL -> 'Strat [none] . OPDS) = true .
+  eq Q isStrat OPDS = false [owise] .
+  
+  eq def(M, call(T), SSM) = def2(M, getTerm(metaReduce(M,T)), SSM, 0, fails) .
+  
+  eq def2(M, T, none, N, E) = E .
+  eq def2(M, T, (strat Q : TyL .) SSM, N, E) = def2(M, T, SSM, N, E) .
+  ceq def2(M, T, (csd T' := E if ECO .) SSM, N, E') = 
+      def2(M, T, (csd T' := E if ECO .) SSM, N + 1, or(E', substStrat(M, E, Sb)))
+   if Sb := metaMatch(M, T', T, ECO, N) .
+  eq def2(M, T, (csd T' := E if ECO .) SSM, N, E') = def2(M, T, SSM, 0, E') [owise] .
+  
+  op ground : TermList -> Bool .
+  
+  eq ground(C) = true .
+  eq ground(V) = false .
+  eq ground(F[TL]) = ground(TL) .
+  eq ground((TL, TL')) = ground(TL) and ground(TL') .
+  eq ground(empty) = true .
+  
+  eq subst(M, T, none) = T .
+  eq subst(M, T, Sb) = if ground(subst2(M,T,Sb)) then getTerm(metaReduce(M, subst2(M,T,Sb))) 
+                       else subst2(M,T,Sb) fi [owise] .   
+  
+  eq subst2(M, T, none) = T .
+  eq subst2(M, T, A ; Sb) = subst2(M, subst3(M,T,A), Sb) .
+  
+  op _<-_ : Term Term -> Assignment [ditto] .  
+  
+  
+  eq subst3(M, C, V <- T) = C .
+  eq subst3(M, V, V' <- T) = if V == V' then T else V fi .
+  eq subst3(M, F[TL], V <- T) = F[subst3(M, TL, V <- T)] .
+  eq subst3(M, (TL, TL'), V <- T) = subst3(M, TL, V <- T), subst3(M, TL', V <- T) .
+  eq subst3(M, T, A) = subst4(M, T, A) [owise] .
+  
+  ceq subst4(M, T, T' <- T'') = replace(M, CX, T'')
+   if { Sb, CX } := metaXmatch(M, T', T, nil, 0, unbounded, 0) .
+  eq subst4(M, T, T' <- T'') = T [owise] .
+
+
+  eq substStrat(M, E, none) = E .
+  eq substStrat(M, E, A ; Sb) = substStrat(M, substStrat2(M, E, A), Sb) .
+  
+***  eq substStrat2(M, Q, T <- T') = Q .
+  eq substStrat2(M, idle, T <- T') = idle .
+  eq substStrat2(M, fails, T <- T') = fails .
+  eq substStrat2(M, top(E), T <- T') = top(substStrat2(M, E, T <- T')) .
+  eq substStrat2(M, or(E,  E'), T <- T') =
+     or(substStrat2(M, E, T <- T'), substStrat2(M, E', T <- T')) .
+  eq substStrat2(M, seq(E,  E'), T <- T') =
+     seq(substStrat2(M, E, T <- T'), substStrat2(M, E', T <- T')) .
+  eq substStrat2(M, if(E,  E', E''), T <- T') =
+     if(substStrat2(M, E, T <- T'), substStrat2(M, E', T <- T'), 
+        substStrat2(M, E'', T <- T')) .
+  eq substStrat2(M, orelse(E,  E'), T <- T') =
+     orelse(substStrat2(M, E, T <- T'), substStrat2(M, E', T <- T')) .
+  eq substStrat2(M, not(E), T <- T') = not(substStrat2(M, E, T <- T')) .
+  eq substStrat2(M, try(E), T <- T') = try(substStrat2(M, E, T <- T')) .
+  eq substStrat2(M, test(E), T <- T') = test(substStrat2(M, E, T <- T')) .
+  eq substStrat2(M, E *, T <- T') = substStrat2(M, E, T <- T') * .
+  eq substStrat2(M, E +, T <- T') = substStrat2(M, E, T <- T') + .
+  eq substStrat2(M, E !, T <- T') = substStrat2(M, E, T <- T') ! .
+  eq substStrat2(M, call(T1), T <- T') = call(subst3(M, T1, T <- T')) .
+  eq substStrat2(M, one(E), T <- T') = one(substStrat2(M, E, T <- T')) .
+  eq substStrat2(M, match(T1,CO), T <- T') = 
+     match(subst(M, T1, T <- T'), substCond(M, CO, T <- T')) .
+  eq substStrat2(M, xmatch(T1,CO), T <- T') = 
+     xmatch(subst(M, T1, T <- T'), substCond(M, CO, T <- T')) .
+  eq substStrat2(M, amatch(T1,CO), T <- T') = 
+     amatch(subst(M, T1, T <- T'), substCond(M, CO, T <- T')) .
+  eq substStrat2(M, matchrew(T1,CO,TSL), T <- T') = 
+     matchrew(subst(M, T1, T <- T'), substCond(M, CO, T <- T'),
+              substTSL(M, TSL, T <- T')) .
+  eq substStrat2(M, xmatchrew(T1,CO,TSL), T <- T') = 
+     xmatchrew(subst(M, T1, T <- T'), substCond(M, CO, T <- T'),
+               substTSL(M, TSL, T <- T')) .
+  eq substStrat2(M, amatchrew(T1,CO,TSL), T <- T') = 
+     amatchrew(subst(M, T1, T <- T'), substCond(M, CO, T <- T'),
+               substTSL(M, TSL, T <- T')) .
+  eq substStrat2(M, Q[Sb], T <- T') = Q[substSubst(M, Sb, T <- T')] .
+  eq substStrat2(M, Q[Sb]{SL}, T <- T') = 
+     Q[substSubst(M, Sb, T <- T')]{substSL(M, SL,T <- T')} .
+    
+  eq substSubst(M, none, T <- T') = none .
+  eq substSubst(M, (T1 <- T2 ; Sb), T <- T') = 
+     T1 <- subst(M, T2, T <- T') ;
+     substSubst(M, Sb, T <- T') .
+    
+  eq substCond(M, nil, T <- T') = nil .
+  eq substCond(M, T1 = T2 /\ CO, T <- T') = 
+     subst(M, T1, T <- T') = subst(M, T2, T <- T') /\
+     substCond(M, CO, T <- T') .
+  eq substCond(M, T1 := T2 /\ CO, T <- T') = 
+     subst(M, T1, T <- T') := subst(M, T2, T <- T') /\
+     substCond(M, CO, T <- T') .
+  eq substCond(M, T1 : S /\ CO, T <- T') = 
+     subst(M, T1, T <- T') : S /\
+     substCond(M, CO, T <- T') .
+     
+  eq substSL(M, nil, T <- T') = nil .
+  eq substSL(M, bfs(E), T <- T') = bfs(substStrat(M, E,T <- T')) .
+  eq substSL(M, SL SL', T <- T') =
+     substSL(M, SL, T <- T') substSL(M, SL', T <- T') .
+     
+  eq substTSL(M, nilTSL, T <- T') = nilTSL .
+  eq substTSL(M, T1 using E, T <- T') = 
+     subst(M, T1, T <- T') using substStrat(M, E,T <- T') .
+  eq substTSL(M, (TSL, TSL'), T <- T') =
+     substTSL(M, TSL, T <- T'), substTSL(M, TSL', T <- T') .
+     
+  
+  eq replace(M, CX, T) = if ground(replace(CX,T)) then getTerm(metaReduce(M, replace(CX,T))) 
+                         else replace(CX,T) fi . 
+  
+  eq replace([], T) = T .
+  eq replace(F[CTL], T) = F[replace(CTL, T)] .
+  eq replace((TL:NeTermList, CTL), T) = TL:NeTermList, replace(CTL, T) .
+  eq replace((CTL, TL:NeTermList), T) = replace(CTL, T), TL:NeTermList .
+
+  op rules : Module Qid -> RuleSet [memo] .
+  op rules : RuleSet Qid RuleSet -> RuleSet .
+  
+  eq rules(M, L) = rules(getRls(M), L, none) .
+  eq rules( (crl T => T' if CO [label(L) AS] .) RS, L, RS') =  
+     rules(RS, L, RS' (crl T => T' if CO [label(L) AS] .)) . 
+  eq rules(RS, L, RS') = RS' [owise] .
+  
+endfm
+
+fmod STRATEGIES-SEMANTICS is
+  inc STRATEGIES-DEFINITIONS .
+  pr AUX-OPERATIONS .
+  
+  sorts TupleQ Queue .
+  subsorts Term TupleQ < Queue .
+  
+  sort SState .
+  subsorts Queue < SState .
+  
+  op {_;_} : Term Strat -> TupleQ .
+  op {_,_,_} : Term Strat Nat -> TupleQ .
+  op {_,_,_,_} : Term Strat Rule Nat -> TupleQ .
+  op {_,_,_,_} : Term Strat Nat TupleQ -> TupleQ .
+  op {_,_,_,_} : Term Term Context ResCO -> TupleQ .
+  op {_,_,_,_,_} : Term Strat Nat MatchPair ResTSL -> TupleQ . 
+  op {_,_,_,_,_} : Term Strat Nat Substitution ResTSL -> TupleQ .
+  
+  op nilQ : -> Queue .
+  op q : Queue Queue -> Queue [assoc id: nilQ].
+  op fail : -> Queue .
+
+  sorts TupleCO ResCO .
+  subsorts Substitution TupleCO < ResCO .
+  
+  op {_,_,_} : Substitution Condition SearchList -> TupleCO .
+  op {_,_,_,_} : Substitution Condition SearchList Nat -> TupleCO .
+  op {_,_,_,_,_} : Substitution Condition SearchList SState Nat -> TupleCO .
+  
+  op emptyP2 : -> ResCO [ctor] .
+  op q2 : ResCO ResCO -> ResCO [ctor assoc id: emptyP2] .
+  op fail2 : -> ResCO .
+  
+  sorts TupleTSL ResTSL .
+  subsorts Substitution TupleTSL < ResTSL .
+  
+  op {_,_} : Substitution TermStratList -> TupleTSL .
+  op {_,_,_} : Substitution TermStratList Queue -> TupleTSL .
+  
+  op emptyP3 : -> ResTSL [ctor] .
+  op q3 : ResTSL ResTSL -> ResTSL [ctor assoc id: emptyP3] .
+  op fail3 : -> ResTSL .
+  
+  op first : Module SSModule SState -> SState .
+  op next : Module SSModule SState -> SState .
+  
+  op firstCO : Module SSModule ResCO -> ResCO .
+  op nextCO : Module SSModule ResCO -> ResCO .
+  
+  sort TuplePS .
+  op <_;_> : SState Substitution -> TuplePS .
+  
+  op firstMatch : Module SSModule SState Term -> TuplePS .
+  op nextMatch : Module SSModule SState Term -> TuplePS .
+  
+  op firstTSL : Module SSModule Substitution ResTSL -> ResTSL .
+  op nextTSL : Module SSModule Substitution ResTSL -> ResTSL .
+  
+  op merge : Queue Queue -> Queue .
+  op merge2 : ResCO ResCO -> ResCO .
+  op merge3 : ResTSL ResTSL -> ResTSL .
+  op oneStep : Module SSModule TupleQ -> Queue .
+  op extendSeq : Queue Strat -> Queue .
+  op continue : Module SSModule Queue -> Queue .
+  op get-rules : Module SSModule TupleQ RuleSet Queue -> Queue .
+  
+  var M : Module .
+  vars T T' T'' T1 T2 T3 T4 : Term .
+  var N : Nat .
+  vars L I : Qid .
+  vars E E' E'' : Strat .
+  var Ty : Type .
+  vars Sb Sb' Sb1 Sb1' Sb2 : Substitution .
+  vars CX CX1 : Context .
+  var C : EqCondition .
+  var CO : Condition .
+  var SL : SearchList .
+  vars PA2 PA2' Q2 Q2' : ResCO .
+  var At : AttrSet .
+  var SSM : SSModule .
+  var S : Sort .
+  var TSL : TermStratList .
+  vars PA3 PA3' Q3 Q3' : ResTSL .
+  vars Q Q' Q'' : Queue .
+  var TQ : TupleQ .
+  var TCO : TupleCO .
+  var TTSL : TupleTSL .
+  vars R R' : Rule .
+  var RS : RuleSet .
+  
+  *** base cases
+  
+  eq first(M, SSM, Q) = next(M, SSM, Q) .
+  eq next(M, SSM, q(T, q(T', Q))) = q(T', Q) . --- !!
+  eq next(M, SSM, q(T, Q)) = next(M, SSM , Q) [owise] .
+  eq next(M, SSM, nilQ) = nilQ .
+  
+  *** idle and fails
+  
+  eq next(M, SSM, q({ T ; idle }, Q)) = q(T, Q) .
+  eq next(M, SSM, q({ T ; fails }, Q)) = next(M, SSM, Q) .
+  
+  eq oneStep(M, SSM, { T ; idle }) = T .
+  eq oneStep(M, SSM, { T ; fails }) = nilQ .
+  
+  *** Label
+  
+  ceq next(M, SSM, q({ T ; L[Sb] }, Q)) = continue(M, SSM, merge(Q', Q))
+   if Q' := oneStep(M, SSM, { T, L[Sb], 0}) .
+  
+  eq oneStep(M, SSM, { T ; L[Sb]}) = oneStep(M, SSM, { T, L[Sb], 0}) .
+  ceq oneStep(M, SSM, { T, L[Sb], N}) = q(T', oneStep(M, SSM, { T, L[Sb], N + 1}))
+   if { T', Ty, Sb', CX } := metaXapply(M, T, L, Sb, 0, unbounded, N) .
+  eq oneStep(M, SSM, { T, L[Sb], N}) = nilQ [owise] .  
+  
+  *** Top(Label)
+
+  ceq next(M, SSM, q({ T ; top(L[Sb]) }, Q)) = continue(M, SSM, merge(Q', Q))
+   if Q' := oneStep(M, SSM, { T, top(L[Sb]), 0}) .
+  
+  eq oneStep(M, SSM, { T ; top(L[Sb])}) = oneStep(M, SSM, { T, top(L[Sb]), 0}) .
+  ceq oneStep(M, SSM, { T, top(L[Sb]), N}) = q(T', oneStep(M, SSM, { T, top(L[Sb]), N + 1}))
+   if { T', Ty, Sb' } := metaApply(M, T, L, Sb, N) .
+  eq oneStep(M, SSM, { T, top(L[Sb]), N}) = nilQ [owise] .  
+  
+  *** Label with conditions
+
+   op next-rule : Module SSModule SState -> SState .
+   
+  ceq next(M, SSM, q({ T ; L[Sb]{SL} }, Q)) = continue(M, SSM, q(Q', Q))
+   if Q' := get-rules(M, SSM, { T ; L[Sb]{SL} }, rules(M,L), nilQ) .
+      
+  ceq next(M, SSM, q({ T, L[Sb]{SL}, R, N }, Q)) = continue(M, SSM, merge(Q', Q))
+   if Q' := oneStep(M, SSM, { T, L[Sb]{SL}, R, N }) .
+      
+  eq oneStep(M, SSM, { T ; L[Sb]{SL}}) = get-rules(M, SSM, { T ; L[Sb]{SL} }, rules(M,L), nilQ) .
+  
+  ceq oneStep(M, SSM, { T, L[Sb]{SL}, crl T1 => T'' if CO [At] ., N }) = 
+      q(T2, q({T, T'', CX, q2(Sb1, Q2)}, 
+              oneStep(M,SSM, { T, L[Sb]{SL}, crl T1 => T'' if CO [At] ., N + 1}))) 
+   if { Sb', CX } := metaXmatch(M, T1, T, nil, 0, unbounded, N) /\
+      q2(Sb1, Q2) := nextCO(M, SSM, { Sb ; Sb', CO, SL }) /\
+      T2 := replace(M, CX, subst(M, T'',Sb1)) .
+  
+  ceq oneStep(M, SSM, { T, L[Sb]{SL}, crl T1 => T'' if CO [At] ., N }) = 
+      oneStep(M,SSM, { T, L[Sb]{SL}, crl T1 => T'' if CO [At] ., N + 1}) 
+   if { Sb', CX } := metaXmatch(M, T1, T, nil, 0, unbounded, N) /\
+      fail2 = nextCO(M, SSM, { Sb ; Sb', CO, SL })  .
+  
+  eq oneStep(M, SSM, { T, L[Sb]{SL}, R, N }) =  nilQ [owise] .
+  
+  ceq next(M, SSM, q({T, T'', CX, q2(Sb1, Q2)},Q)) =
+      merge(q(T2, {T, T'', CX, q2(Sb1', Q2')}), Q)
+   if q2(Sb1', Q2') := nextCO(M, SSM, Q2) /\
+      T2 := replace(M, CX, subst(M, T'',Sb1')) .
+      
+  eq next(M, SSM, q({T, T'', CX, q2(Sb1, Q2)},Q)) = next(M, SSM, Q) [owise] .
+      
+  ceq oneStep(M, SSM, {T, T'', CX, q2(Sb1, Q2)}) =
+      q(T2, {T, T'', CX, q2(Sb1', Q2')})
+   if q2(Sb1', Q2') := nextCO(M, SSM, Q2) /\
+      T2 := replace(M, CX, subst(M, T'',Sb1')) .
+      
+  eq oneStep(M, SSM, {T, T'', CX, q2(Sb1, Q2)}) = nilQ [owise] .
+     
+      
+  *** Top(Label with conditions)
+  
+  eq next(M, SSM, q({ T ; top(L[Sb]{SL}) }, Q)) = 
+     continue(M, SSM, q(get-rules(M, SSM, { T ; top(L[Sb]{SL}) }, rules(M,L), nilQ), Q)) .
+      
+  eq next(M, SSM, q({ T, top(L[Sb]{SL}), R, N }, Q)) = 
+     continue(M, SSM, merge(oneStep(M, SSM, { T, top(L[Sb]{SL}), R, N }), Q)) .
+       
+  eq oneStep(M, SSM, { T ; top(L[Sb]{SL})}) = 
+     get-rules(M, SSM, { T ; top(L[Sb]{SL}) }, rules(M,L), nilQ) .
+  
+  op oSTLWC2 : Module SSModule TupleQ Substitution? -> Queue .
+  op oSTLWC3 : Module SSModule TupleQ Substitution? ResCO -> Queue .
+  
+  eq oneStep(M, SSM, { T, top(L[Sb]{SL}), crl T1 => T'' if CO [At] ., N }) =
+     oSTLWC2(M, SSM, { T, top(L[Sb]{SL}), crl T1 => T'' if CO [At] ., N }, metaMatch(M, T1, T, nil, N)) .
+
+  eq oSTLWC2(M, SSM, { T, top(L[Sb]{SL}), R, N }, noMatch) = nilQ .
+  
+  eq oSTLWC2(M, SSM, { T, top(L[Sb]{SL}), crl T1 => T'' if CO [At] ., N }, Sb') =
+     oSTLWC3(M, SSM, { T, top(L[Sb]{SL}), crl T1 => T'' if CO [At] ., N }, Sb', 
+             nextCO(M, SSM, { Sb ; Sb', CO, SL })) .
+     
+  ceq oSTLWC3(M, SSM, { T, top(L[Sb]{SL}), crl T1 => T'' if CO [At] ., N }, Sb', q2(Sb1, Q2)) = 
+      q(T2, q({T, T'', [], q2(Sb1, Q2)}, 
+              oneStep(M,SSM, { T, top(L[Sb]{SL}), crl T1 => T'' if CO [At] ., N + 1}))) 
+   if T2 := subst(M, T'',Sb1) .
+  
+  eq oSTLWC3(M, SSM, { T, top(L[Sb]{SL}), crl T1 => T'' if CO [At] ., N }, Sb', fail2) = 
+      oneStep(M, SSM, { T, top(L[Sb]{SL}), crl T1 => T'' if CO [At] ., N + 1}) .
+  
+  *** Test amatch (with extension, matching everywhere)
+  
+  ceq next(M, SSM, q({ T ; amatch(T',C) }, Q)) = q(T,Q)
+   if { Sb, CX } := metaXmatch(M, T', T, C, 0, unbounded, 0) .
+   
+  eq next(M, SSM, q({ T ; amatch(T',C) }, Q)) = next(M, SSM, Q) [owise] .
+  
+  eq oneStep(M, SSM, { T ; amatch(T',C) }) = next(M, SSM, { T ; amatch(T',C) }) .
+   
+  *** Test xmatch (with extension at the top)
+  
+  ceq next(M, SSM, q({ T ; xmatch(T',C) }, Q)) = q(T,Q)
+   if { Sb, CX } := metaXmatch(M, T', T, C, 0, 0, 0) .
+   
+  eq next(M, SSM, q({ T ; xmatch(T',C) }, Q)) = next(M, SSM, Q) [owise] .
+  
+  eq oneStep(M, SSM, { T ; xmatch(T',C) }) = next(M, SSM, { T ; xmatch(T',C) }) .
+   
+  *** Test match (matching at the top)
+  
+  ceq next(M, SSM, q({ T ; match(T',C) }, Q)) = q(T,Q)
+   if Sb := metaMatch(M, T', T, C, 0) .
+   
+  eq next(M, SSM, q({ T ; match(T',C) }, Q)) = next(M, SSM, Q) [owise] .
+  
+  eq oneStep(M, SSM, { T ; match(T',C) }) = next(M, SSM, { T ; match(T',C) }) .
+  
+  
+  *** Union
+  
+  eq next(M, SSM, q({ T ; or(E, E')}, Q)) = next(M, SSM, q({T ; E}, {T ; E'}, Q)) .
+        
+  eq oneStep(M, SSM, { T ; or(E, E')}) =  q({T ; E}, {T ; E'}) .
+       
+  *** Concatenation
+  
+  ceq next(M, SSM, q({ T ; seq(E, E') }, Q)) = continue(M, SSM, merge(Q'', Q))
+   if Q' := oneStep(M, SSM, { T ; E }) /\
+      Q'' := extendSeq(Q', E') .
+      
+  ceq oneStep(M, SSM, { T ; seq(E, E') }) = Q''
+    if Q' := oneStep(M, SSM, { T ; E }) /\
+       Q'' := extendSeq(Q', E') .
+       
+  ceq next(M, SSM, q({ T, seq(E,E'), N, TQ}, Q)) = continue(M, SSM, merge(Q'', Q))
+   if Q' := oneStep(M, SSM, TQ) /\
+      Q'' := extendSeq(Q', E') .
+
+  ceq oneStep(M, SSM, { T, seq(E,E'), N, TQ}) = Q''
+   if Q' := oneStep(M, SSM, TQ) /\
+      Q'' := extendSeq(Q', E') .
+              
+
+  *** iteration (0 or more)
+  
+  eq next(M, SSM, q({ T ; E * }, Q)) = q(T, q({ T ; seq(E, (E *))}, Q)) .
+  
+  eq oneStep(M, SSM, { T ; E * }) = q(T, q({ T ; seq(E, (E *))}, nilQ)) .
+  
+    
+  *** iteration (1 or more)
+  
+  eq E + = seq(E, (E *)) .
+  
+  *** one solution
+  
+  ceq next(M, SSM, q({ T ; one(E)}, Q)) = q(T', Q)  
+   if q(T',Q') := next(M, SSM, {T ; E}) .
+      
+  eq next(M, SSM, q({ T ; one(E)}, Q)) = next(M, SSM, Q) [owise] .
+
+  ceq oneStep(M, SSM, { T ; one(E)}) = T'
+   if q(T',Q') := next(M, SSM, { T ; E}) .
+      
+  eq oneStep(M, SSM, { T ; one(E)}) = nilQ [owise] .
+  
+  *** if-then-else
+  
+  ceq next(M, SSM, q({ T ; if(E,E',E'')}, Q)) = continue(M, SSM, merge(Q'',Q)) 
+   if q(T',Q') := next(M, SSM, {T ; E}) /\
+      Q'' := extendSeq(q(T',Q'), E') .
+      
+  eq next(M, SSM, q({ T ; if(E,E',E'')}, Q)) = next(M, SSM, q({ T ; E''}, Q)) [owise] .
+
+  ceq oneStep(M, SSM, { T ; if(E,E',E'')}) = Q''
+   if q(T',Q') := next(M, SSM, { T ; E}) /\
+      Q'' := extendSeq(q(T',Q'), E') .
+      
+  eq oneStep(M, SSM, { T ; if(E,E',E'')}) = { T ; E''} [owise] .
+
+  *** derived strategies
+  
+  eq orelse(E,E') = if(E, idle, E') .    
+  
+  eq not(E) = if(E, fails, idle) .
+    
+  eq E ! = if(E, E !, idle) .  --- this is more efficient than
+                               ---  eq E ! = seq((E *), not(E)) .
+  
+  eq try(E) = if(E, idle, idle) .
+  
+  eq test(E) = if(not(E), fails, idle) .
+
+  *** strategy identifier
+  
+  ceq next(M, SSM, q({ T ; call(T') }, Q)) = next(M, SSM, q({ T ; E }, Q))
+   if E := def(M, call(T'), SSM) .
+   
+  ceq oneStep(M, SSM, { T ; call(T') }) = { T ; E }
+   if E := def(M, call(T'), SSM) .
+      
+   
+  *** match with strategies, matching everywhere
+  
+  ceq next(M, SSM, q({ T ; amatchrew(T', C, TSL)}, Q)) =
+      continue(M, SSM, merge(Q',Q))
+   if Q' := oneStep(M, SSM, { T, amatchrew(T', C, TSL), 0}) .
+      
+  eq oneStep(M, SSM, { T ; amatchrew(T', C, TSL)}) = 
+     oneStep(M, SSM, { T, amatchrew(T', C, TSL), 0}) .
+     
+  ceq oneStep(M, SSM, { T , amatchrew(T', C, TSL), N }) =
+      q(T2, { T, amatchrew(T', C, TSL), N, {Sb, CX}, q3(Sb',Q3) }, 
+        oneStep(M, SSM, { T, amatchrew(T', C, TSL), N + 1}))
+   if { Sb, CX } := metaXmatch(M, T', T, C, 0, unbounded, N) /\
+      q3(Sb',Q3) := nextTSL(M, SSM, Sb, {none, TSL}) /\
+      T2 := replace(M, CX, subst(M, subst(M, T', Sb'), Sb)) .
+                 
+  ceq oneStep(M, SSM, { T, amatchrew(T', C, TSL), N }) =
+       oneStep(M, SSM, { T, amatchrew(T', C, TSL), N + 1})
+   if { Sb, CX } := metaXmatch(M, T', T, C, 0, unbounded, N) /\
+      fail3 = nextTSL(M, SSM, Sb, {none, TSL}) .
+                 
+  eq oneStep(M, SSM, { T, amatchrew(T', C, TSL), N }) = nilQ [owise] . 
+   
+  ceq next(M, SSM, q({ T, amatchrew(T', C, TSL), N, {Sb, CX}, Q3 },Q)) = 
+      merge( q(T2, { T, amatchrew(T', C, TSL), N, {Sb, CX}, q3(Sb',Q3') }), Q)
+   if q3(Sb',Q3') := nextTSL(M, SSM, Sb, Q3) /\
+      T2 := replace(M, CX, subst(M, subst(M, T', Sb'), Sb)) .
+   
+  ceq next(M, SSM, q({ T, amatchrew(T', C, TSL), N, {Sb, CX}, Q3 },Q)) = 
+      next(M, SSM, Q)
+   if fail3 = nextTSL(M, SSM, Sb, Q3) .
+
+  ceq oneStep(M, SSM, { T, amatchrew(T', C, TSL), N, {Sb, CX}, Q3 }) = 
+      q(T2, { T, amatchrew(T', C, TSL), N, {Sb, CX}, q3(Sb',Q3') })
+   if q3(Sb',Q3') := nextTSL(M, SSM, Sb, Q3) /\
+      T2 := replace(M, CX, subst(M, subst(M, T', Sb'), Sb)) .
+   
+  ceq oneStep(M, SSM, { T, amatchrew(T', C, TSL), N, {Sb, CX}, Q3 }) = nilQ
+   if fail3 = nextTSL(M, SSM, Sb, Q3) .
+
+  *** match with strategies, matching with extension at the top
+  
+  ceq next(M, SSM, q({ T ; xmatchrew(T', C, TSL)}, Q)) =
+      continue(M, SSM, merge(Q',Q))
+   if Q' := oneStep(M, SSM, { T, xmatchrew(T', C, TSL), 0}) .
+      
+  eq oneStep(M, SSM, { T ; xmatchrew(T', C, TSL)}) = 
+     oneStep(M, SSM, { T, xmatchrew(T', C, TSL), 0}) .
+     
+  ceq oneStep(M, SSM, { T , xmatchrew(T', C, TSL), N }) =
+      q(T2, { T, xmatchrew(T', C, TSL), N, {Sb, CX}, q3(Sb',Q3) }, 
+        oneStep(M, SSM, { T, xmatchrew(T', C, TSL), N + 1}))
+   if { Sb, CX } := metaXmatch(M, T', T, C, 0, 0, N) /\
+      q3(Sb',Q3) := nextTSL(M, SSM, Sb, {none, TSL}) /\
+      T2 := replace(M, CX, subst(M, subst(M, T', Sb'), Sb)) .
+                 
+  ceq oneStep(M, SSM, { T, xmatchrew(T', C, TSL), N }) =
+       oneStep(M, SSM, { T, xmatchrew(T', C, TSL), N + 1})
+   if { Sb, CX } := metaXmatch(M, T', T, C, 0, 0, N) /\
+      fail3 = nextTSL(M, SSM, Sb, {none, TSL}) .
+                 
+  eq oneStep(M, SSM, { T, xmatchrew(T', C, TSL), N }) = nilQ [owise] . 
+   
+  ceq next(M, SSM, q({ T, xmatchrew(T', C, TSL), N, {Sb, CX}, Q3 },Q)) = 
+      merge( q(T2, { T, xmatchrew(T', C, TSL), N, {Sb, CX}, q3(Sb',Q3') }), Q)
+   if q3(Sb',Q3') := nextTSL(M, SSM, Sb, Q3) /\
+      T2 := replace(M, CX, subst(M, subst(M, T', Sb'), Sb)) .
+   
+  ceq next(M, SSM, q({ T, xmatchrew(T', C, TSL), N, {Sb, CX}, Q3 },Q)) = 
+      next(M, SSM, Q)
+   if fail3 = nextTSL(M, SSM, Sb, Q3) .
+
+  ceq oneStep(M, SSM, { T, xmatchrew(T', C, TSL), N, {Sb, CX}, Q3 }) = 
+      q(T2, { T, xmatchrew(T', C, TSL), N, {Sb, CX}, q3(Sb',Q3') })
+   if q3(Sb',Q3') := nextTSL(M, SSM, Sb, Q3) /\
+      T2 := replace(M, CX, subst(M, subst(M, T', Sb'), Sb)) .
+   
+  ceq oneStep(M, SSM, { T, xmatchrew(T', C, TSL), N, {Sb, CX}, Q3 }) = nilQ
+   if fail3 = nextTSL(M, SSM, Sb, Q3) .
+
+  *** match with strategies, matching at the top
+  
+  ceq next(M, SSM, q({ T ; matchrew(T', C, TSL)}, Q)) =
+      continue(M, SSM, merge(Q',Q))
+   if Q' := oneStep(M, SSM, { T, matchrew(T', C, TSL), 0}) .
+      
+  eq oneStep(M, SSM, { T ; matchrew(T', C, TSL)}) = 
+     oneStep(M, SSM, { T, matchrew(T', C, TSL), 0}) .
+     
+  ceq oneStep(M, SSM, { T , matchrew(T', C, TSL), N }) =
+      q(T2, { T, matchrew(T', C, TSL), N, Sb, q3(Sb',Q3) }, 
+        oneStep(M, SSM, { T, matchrew(T', C, TSL), N + 1}))
+   if Sb := metaMatch(M, T', T, C, N) /\
+      q3(Sb',Q3) := nextTSL(M, SSM, Sb, {none, TSL}) /\
+      T2 := subst(M, subst(M, T', Sb'), Sb) .
+                 
+  ceq oneStep(M, SSM, { T, matchrew(T', C, TSL), N }) =
+       oneStep(M, SSM, { T, matchrew(T', C, TSL), N + 1})
+   if Sb := metaMatch(M, T', T, C, N) /\
+      fail3 = nextTSL(M, SSM, Sb, {none, TSL}) .
+                 
+  eq oneStep(M, SSM, { T, matchrew(T', C, TSL), N }) = nilQ [owise] . 
+   
+  ceq next(M, SSM, q({ T, matchrew(T', C, TSL), N, Sb, Q3 },Q)) = 
+      merge( q(T2, { T, matchrew(T', C, TSL), N, Sb, q3(Sb',Q3') }), Q)
+   if q3(Sb',Q3') := nextTSL(M, SSM, Sb, Q3) /\
+      T2 := subst(M, subst(M, T', Sb'), Sb) .
+   
+  ceq next(M, SSM, q({ T, matchrew(T', C, TSL), N, Sb, Q3 },Q)) = 
+      next(M, SSM, Q)
+   if fail3 = nextTSL(M, SSM, Sb, Q3) .
+
+  ceq oneStep(M, SSM, { T, matchrew(T', C, TSL), N, Sb, Q3 }) = 
+      q(T2, { T, matchrew(T', C, TSL), N, Sb, q3(Sb',Q3') })
+   if q3(Sb',Q3') := nextTSL(M, SSM, Sb, Q3) /\
+      T2 := subst(M, subst(M, T', Sb'), Sb) .
+   
+  ceq oneStep(M, SSM, { T, matchrew(T', C, TSL), N, Sb, Q3 }) = nilQ
+   if fail3 = nextTSL(M, SSM, Sb, Q3) .
+
+   
+  *** Resolution of conditions. The result is a SUBSTITUTION
+  
+  eq nextCO(M, SSM, emptyP2) = fail2 .
+   
+  eq nextCO(M, SSM, q2({ Sb, nil, nil }, Q2)) = q2(Sb, Q2) .
+  
+  eq nextCO(M, SSM, q2(Sb, Q2)) = nextCO(M, SSM, Q2) . *** ??
+  
+  *** T => T'
+   
+  ceq nextCO(M, SSM, q2({ Sb, T => T' /\ CO, bfs(E) SL}, Q2)) =
+      nextCO(M, SSM, merge2(q2({Sb ; Sb', CO, SL}, 
+                               {Sb, T1 => T2 /\ CO, bfs(E) SL, q(T3,Q), 0}), Q2))
+   if T1 := subst(M, T, Sb) /\
+      T2 := subst(M, T', Sb) /\
+      < q(T3,Q); Sb' > := firstMatch(M, SSM, { T1 ; E }, T2) . 
+      
+  eq nextCO(M, SSM, q2({ Sb, T => T' /\ CO, bfs(E) SL}, Q2)) =
+      nextCO(M, SSM, Q2) [owise] .
+
+  ceq nextCO(M, SSM, q2({ Sb, T1 => T2 /\ CO, bfs(E) SL, q(T3,Q), N}, Q2)) =
+      nextCO(M, SSM, merge2(q2({Sb ; Sb', CO, SL}, 
+                               {Sb, T1 => T2 /\ CO, bfs(E) SL, q(T3,Q), N + 1}), Q2))
+   if Sb' := metaMatch(M, T2, T3, nil, N + 1) . 
+
+  ceq nextCO(M, SSM, q2({ Sb, T1 => T2 /\ CO, bfs(E) SL, q(T3,Q), N}, Q2)) =
+      nextCO(M, SSM, merge2(q2({Sb ; Sb', CO, SL}, 
+                               {Sb, T1 => T2 /\ CO, bfs(E) SL, q(T4,Q'), 0}), Q2))
+   if noMatch = metaMatch(M, T2, T3, nil, N + 1) /\
+      < q(T4,Q'); Sb' > := nextMatch(M, SSM, q(T3,Q), T2). 
+      
+  eq nextCO(M, SSM, q2({ Sb, T1 => T2 /\ CO, bfs(E) SL, q(T3,Q), N}, Q2)) =
+     nextCO(M, SSM, Q2) [owise] .
+
+  *** T = T'
+  
+  ceq nextCO(M, SSM, q2({ Sb, T = T' /\ CO, SL }, Q2)) 
+      = nextCO(M, SSM, q2({ Sb , CO, SL }, Q2))
+   if T1 := subst(M, T, Sb) /\
+      T2 := subst(M, T', Sb) /\
+      { 'true.Bool, 'Bool } := metaReduce(M, '_==_[T1,T2]) .
+    
+  eq nextCO(M, SSM, q2({ Sb, T = T' /\ CO, SL }, Q2)) 
+      = nextCO(M, SSM, Q2) [owise] .
+   
+  *** T := T'
+             
+  ceq nextCO(M, SSM, q2({ Sb, T := T' /\ CO, SL }, Q2)) 
+      = nextCO(M, SSM, merge2(q2({ Sb ; Sb' , CO, SL }, 
+         { Sb, T1 := T2 /\ CO, SL, 0 }), Q2))
+   if T1 := subst(M, T, Sb) /\
+      T2 := subst(M, T', Sb) /\
+      Sb' := metaMatch(M, T1, T2, nil, 0) .
+      
+  eq nextCO(M, SSM, q2({ Sb, T := T' /\ CO, SL }, Q2)) 
+     = nextCO(M, SSM, Q2) [owise] .
+
+  ceq nextCO(M, SSM, q2({ Sb, T1 := T2 /\ CO, SL, N }, Q2)) 
+     = nextCO(M, SSM, merge2(q2({ Sb ; Sb' , CO, SL }, 
+             { Sb, T1 := T2 /\ CO, SL, N + 1 }), Q2))
+   if Sb' := metaMatch(M, T1, T2, nil, N + 1) .
+             
+  eq nextCO(M, SSM, q2({ Sb, T1 := T2 /\ CO, SL, N }, Q2)) 
+     = nextCO(M, SSM, Q2) [owise] .
+             
+  *** T : S
+  
+  ceq nextCO(M, SSM, q2({ Sb, T : S /\ CO, SL }, Q2)) 
+      = nextCO(M, SSM, q2({ Sb , CO, SL }, Q2))
+   if T1 := subst(M, T, Sb) /\
+      sortLeq(M, getType(metaReduce(M, T1)), S) .
+  
+  eq nextCO(M, SSM, q2({ Sb, T : S /\ CO, SL }, Q2)) 
+     = nextCO(M, SSM, Q2) [owise] .
+  
+  
+  *** FIRST with MATCH
+  op firstMatch2 : Module SSModule Term SState -> TuplePS .
+  op firstMatch3 : Module SSModule Term SState Substitution? -> TuplePS .
+  op nextMatch2 : Module SSModule Term SState -> TuplePS .
+  op nextMatch3 : Module SSModule Term SState Substitution? -> TuplePS .
+
+  eq firstMatch(M, SSM, Q, T) =
+     firstMatch2(M, SSM, T, first(M, SSM, Q)) .
+     
+  eq firstMatch2(M, SSM, T, q(T1, Q')) =
+     firstMatch3(M, SSM, T, q(T1, Q'), metaMatch(M, T, T1, nil, 0)) .
+  eq firstMatch2(M, SSM, T, nilQ) = < nilQ ; none > .
+  
+  eq firstMatch3(M, SSM, T, q(T1, Q'), Sb) = < q(T1, Q'); Sb > .
+  eq firstMatch3(M, SSM, T, q(T1, Q'), noMatch) = nextMatch(M, SSM, q(T1, Q'), T) .
+     
+  eq nextMatch(M, SSM, Q, T) = 
+     nextMatch2(M, SSM, T, next(M, SSM, Q)) .
+     
+  eq nextMatch2(M, SSM, T, q(T1, Q')) =
+     nextMatch3(M, SSM, T, q(T1, Q'), metaMatch(M, T, T1, nil, 0)) .
+  eq nextMatch2(M, SSM, T, nilQ) = < nilQ ; none > .
+  
+  eq nextMatch3(M, SSM, T, q(T1, Q'), Sb) = < q(T1, Q'); Sb > .
+  eq nextMatch3(M, SSM, T, q(T1, Q'), noMatch) =
+     nextMatch(M, SSM, q(T1, Q'), T) .
+     
+     
+  *** Resolution of match with strategies  
+  
+  eq nextTSL(M, SSM, Sb, emptyP3) = fail3 .
+  
+  
+  eq nextTSL(M, SSM, Sb, q3({ Sb', nilTSL }, Q3)) = q3(Sb', Q3) .
+  
+  ceq nextTSL(M, SSM, Sb, q3({ Sb', ((T using E), TSL) }, Q3)) =
+      nextTSL(M, SSM, Sb, merge3(q3({ Sb', ((T using E), TSL), q(T',Q) },
+                              { Sb' ; T <- T', TSL }), Q3))
+   if T1 := subst(M, T, Sb) /\
+      E' := substStrat(M, E, Sb) /\
+      q(T',Q) := next(M, SSM, { T1 ; E' }) .
+
+  eq nextTSL(M, SSM, Sb, q3({ Sb', ((T using E), TSL) }, Q3)) =
+     nextTSL(M, SSM, Sb, Q3) [owise] .
+     
+  eq nextTSL(M, SSM, Sb, q3(Sb',Q3)) = nextTSL(M, SSM, Sb, Q3) .
+  
+  ceq nextTSL(M, SSM, Sb, q3({ Sb', ((T using E), TSL), Q }, Q3)) = 
+      nextTSL(M, SSM, Sb, merge3(q3({ Sb', ((T using E), TSL), q(T', Q') },
+                              { Sb' ; T <- T', TSL }), Q3))
+   if q(T', Q') := next(M, SSM, Q) .
+   
+  eq nextTSL(M, SSM, Sb, q3({ Sb', ((T using E), TSL), Q }, Q3)) = 
+      nextTSL(M, SSM, Sb, Q3) [owise] .
+  
+  
+  *** auxiliary operations on queues
+  
+  eq merge(nilQ, Q') = Q' .
+  eq merge(q(T, Q), Q') = q(T, merge(Q, Q')) .
+  eq merge(q(TQ, Q), Q') = merge(Q, q(Q', TQ)) . 
+  
+  eq merge2(emptyP2, Q2) = Q2 .
+  eq merge2(q2(Sb, Q2), Q2') = q2(Sb, merge2(Q2,Q2')) .
+  eq merge2(q2({Sb, nil, nil}, Q2), Q2') = q2({Sb, nil, nil}, merge2(Q2, Q2')) .
+  eq merge2(q2(TCO, Q2), Q2') = merge2(Q2, q2(Q2', TCO)) [owise] .
+  
+  eq merge3(emptyP3, Q3) = Q3 .
+  eq merge3(q3(Sb, Q3), Q3') = q3(Sb, merge3(Q3,Q3')) .
+  eq merge3(q3({Sb, nilTSL}, Q3), Q3') = q3({Sb, nilTSL}, merge3(Q3, Q3')) .
+  eq merge3(q3(TTSL, Q3), Q3') = merge3(Q3, q3(Q3', TTSL)) [owise] .
+  
+  eq extendSeq(nilQ, E) = nilQ .
+  eq extendSeq(q(T, Q), E) = q({ T ; E}, extendSeq(Q, E)) .
+  eq extendSeq(q(TQ, Q'), E') = q({'null.Term, seq(idle,E'), 1, TQ}, extendSeq(Q',E')) .
+  
+  eq continue(M, SSM, nilQ) = nilQ .
+  eq continue(M, SSM, q(T,Q)) = q(T,Q) .
+  eq continue(M, SSM, Q) = next(M, SSM, Q) [owise] .
+  
+  eq get-rules(M, SSM, { T ; E }, none, Q) =  Q .
+  
+  eq get-rules(M, SSM, { T ; L[Sb]{SL} }, crl T' => T'' if CO [At] . RS, Q) =
+     get-rules(M, SSM, { T ; L[Sb]{SL} }, RS, 
+        q(Q,{ T, L[Sb]{SL}, crl subst(M, T', Sb) => T'' if CO [At] ., 0 })) .
+  eq get-rules(M, SSM, { T ; top(L[Sb]{SL}) }, crl T' => T'' if CO [At] . RS, Q) = 
+     get-rules(M, SSM, { T ; top(L[Sb]{SL}) }, RS, 
+        q(Q,{ T, top(L[Sb]{SL}), crl subst(M, T', Sb) => T'' if CO [At] ., 0 })) .
+endfm
+
+
+fmod STRAT-SIGN is
+  sorts @Token@ @Bubble@ .
+  sorts Strategy Search SearchList Assignment Substitution TermStratList .
+  subsort @Token@ < Strategy .  *** label
+  
+  op `(_`) : Strategy -> Strategy .
+  ops idle fails fail : -> Strategy .
+  op all : -> Strategy .
+  op _[_] : @Token@ Substitution -> Strategy [prec 20 gather(e &)] .
+  op _{_} : @Token@ SearchList -> Strategy [prec 20 gather(e &)] .
+  op _[_]{_} : @Token@ Substitution SearchList -> Strategy [prec 20 gather(e & &)] .
+  op _|_ : Strategy Strategy -> Strategy [assoc] .
+  op _;_ : Strategy Strategy -> Strategy [prec 40 assoc] .
+  op _* : Strategy -> Strategy [prec 30 gather(e)] .
+  op _+ : Strategy -> Strategy [prec 30 gather(e)] .
+  op _! : Strategy -> Strategy [prec 30 gather(e)] .
+  op top : Strategy -> Strategy .
+  op match_s.t._ : @Bubble@ @Bubble@ -> Strategy [prec 20] .
+  op amatch_s.t._ : @Bubble@ @Bubble@ -> Strategy .
+  op xmatch_s.t._ : @Bubble@ @Bubble@ -> Strategy .
+  op match_ : @Bubble@ -> Strategy [prec 20] .
+  op amatch_ : @Bubble@ -> Strategy .
+  op xmatch_ : @Bubble@ -> Strategy .
+  op if_then_else_fi : Strategy Strategy Strategy -> Strategy .
+  op _?_:_ : Strategy Strategy Strategy -> Strategy [prec 55 gather(& & &)] .
+  op _orelse_ : Strategy Strategy -> Strategy [prec 45 gather(e E)].
+  op not : Strategy -> Strategy .
+  op try : Strategy -> Strategy .
+  op test : Strategy -> Strategy .
+  op one : Strategy -> Strategy .
+  op matchrew_by_ : @Bubble@ TermStratList -> Strategy [gather(& &)] .
+  op amatchrew_by_ : @Bubble@ TermStratList -> Strategy [gather(& &)] .
+  op xmatchrew_by_ : @Bubble@ TermStratList -> Strategy [gather(& &)] .
+  op matchrew_s.t._by_ : @Bubble@ @Bubble@ TermStratList -> Strategy [gather(& & &)] .
+  op amatchrew_s.t._by_ : @Bubble@ @Bubble@ TermStratList -> Strategy [gather(& & &)] .
+  op xmatchrew_s.t._by_ : @Bubble@ @Bubble@ TermStratList -> Strategy [gather(& & &)] .
+  op _using_ : @Bubble@ Strategy -> TermStratList [prec 50] .
+  op _,_ : TermStratList TermStratList -> TermStratList [assoc prec 60] .
+  op _`(_`) : @Token@ @Bubble@ -> Strategy [prec 20 gather(e &)].
+  
+  subsort Strategy < SearchList .
+  op _,_ : SearchList SearchList -> SearchList [ctor assoc] .
+
+  subsort Assignment < Substitution .
+  op _<-_ : @Bubble@ @Bubble@ -> Assignment [prec 63] . 
+  op none : -> Substitution .
+  op _;_ : Substitution Substitution -> Substitution [assoc comm id: none prec 65] . 
+endfm
+
+fmod STRAT-COMMAND-SIGN is
+  including FULL-MAUDE-SIGN .
+  
+  op srew_using_. : @Bubble@ @Bubble@ -> @Command@ .
+  op srewall_using_. : @Bubble@ @Bubble@ -> @Command@ .
+  op next`. : -> @Command@ .
+  op cont`using_. : @Bubble@ -> @Command@ .
+  op clean`state`. : -> @Command@ .
+  op show`repeats`. : -> @Command@ .
+  op show`no`repeats`. : -> @Command@ .
+
+  sorts StratDefList StratDefModule .
+  subsort StratDefModule < @Input@ .
+  
+  subsort @VarDecl@ < StratDefList .
+  subsort @VarDeclList@ < StratDefList .
+  
+  op strat_:_@_. : @Token@ @TypeList@ @Token@ -> StratDefList .
+  op strat_:`@_. : @Token@ @Token@ -> StratDefList .
+  op sd_:=_. : @Bubble@ @Bubble@ -> StratDefList .
+  op csd_:=_if_. : @Bubble@ @Bubble@ @Bubble@ -> StratDefList .
+  op __ : StratDefList StratDefList -> StratDefList [assoc] .
+  
+  vars B B' B'' : @Bubble@ .
+  vars T T' : @Token@ .
+  var TL : @TypeList@ .
+  var NeTL : @NeTokenList@ .
+  var Ty : @Type@ .
+  
+  eq (sd B := B' .) (strat T : TL @ T' .) = (strat T : TL @ T' .) (sd B := B' .) .
+  eq (sd B := B' .) (strat T : @ T' .) = (strat T : @ T' .) (sd B := B' .) .
+  eq (csd B := B' if B'' .) (strat T : TL @ T' .) = (strat T : TL @ T' .) (csd B := B' if B'' .) .
+  eq (csd B := B' if B'' .) (strat T : @ T' .) = (strat T : @ T' .) (csd B := B' if B'' .) .
+  
+  eq (var NeTL : Ty .) = (vars NeTL : Ty .) .
+  eq (sd B := B' .) (vars NeTL : Ty .) = (vars NeTL : Ty .) (sd B := B' .) .
+  eq (csd B := B' if B'' .) (vars NeTL : Ty .) = (vars NeTL : Ty .) (csd B := B' if B'' .) .
+  
+  op smod_is_endsm : @Token@ StratDefList -> StratDefModule .
+    
+endfm
+
+fmod META-STRAT-SIGN is
+  inc META-LEVEL .
+  pr META-FULL-MAUDE-SIGN .
+  pr UNIT .
+
+  op STRAT-GRAMMAR : -> FModule .
+
+  eq STRAT-GRAMMAR = addImports((including 'STRAT-COMMAND-SIGN .), GRAMMAR) .
+
+  op SGRAMMAR : -> FModule .
+  eq SGRAMMAR
+    = (fmod 'SGRAMMAR is
+         including 'QID-LIST .
+         including 'STRAT-SIGN .
+         sorts none .
+         none
+         op 'token : 'Qid -> '@Token@ 
+              [special(
+                (id-hook('Bubble, '1 '1)
+                 op-hook('qidSymbol, '<Qids>, nil, 'Qid)
+                 id-hook('Exclude, '`[ '`] '< 'to ': '`, '. '`( '`)  '| 
+                                   'try 'top 'not 'test 'one 'match 'xmatch 'amatch)))] .
+         op 'bubble : 'QidList -> '@Bubble@ 
+              [special(
+                (id-hook('Bubble, '1 '-1 '`( '`))
+                 op-hook('qidListSymbol, '__, 'QidList 'QidList, 'QidList)
+                 op-hook('qidSymbol, '<Qids>, nil, 'Qid)
+                 id-hook('Exclude, 's.t. ';)))] .
+         none
+         none
+      endfm) .
+endfm
+
+mod STRAT-DATABASE-HANDLING is
+  pr DATABASE-HANDLING .
+  pr STRATEGIES-SEMANTICS .
+  pr META-STRAT-SIGN .
+
+  sort STRATDB .
+  subsort STRATDB < DatabaseClass .
+
+  op STRATDB : -> STRATDB .
+  
+  op state :_ : SState -> Attribute .
+  op stratDefs :_ : SSModule -> Attribute .
+  op results :_ : TermSet -> Attribute .
+  op repeat :_ : Bool -> Attribute .
+  
+  sort StratResult .
+  op <_,_,_> : Bool QidList SState -> StratResult .
+  
+  op procSrew : Module SSModule Term Strat -> StratResult .
+  op procNext : Module SSModule SState TermSet Bool -> StratResult .
+  op procSrewAll : Module SSModule Term Strat Bool -> StratResult .
+  op procNextAll : Module SSModule SState TermSet Nat QidList Bool -> QidList .
+  op parseStratAux : Term Module OpDeclSet -> [Strat] .
+  op parseSearchAux : Term Module OpDeclSet -> [SearchList] .
+  op parseStrat : Term Module OpDeclSet -> [Strat] .
+  op parseSubs : Term Module OpDeclSet -> [Substitution] .
+  op parseSL : Term Module OpDeclSet -> [SearchList] .
+  op parseTSL : Term Module OpDeclSet -> [TermStratList] .
+  op if2 : [Strat] [Strat] [Strat] -> [Strat] .
+  
+  sort ParseSDLResult .
+  op {_,_,_} : Module SSModule OpDeclSet -> ParseSDLResult .
+  op parseSDL : Term Module OpDeclSet -> [SSModule] .
+  op parseSDL : Term Module OpDeclSet SSModule -> [ParseSDLResult] .
+  op parseSDL* : TermList Module OpDeclSet SSModule -> [ParseSDLResult] .
+  
+  op errorStrat : QidList -> [Strat] [ctor format (r o)] .
+  op errorSubstitution : QidList -> [Substitution] [ctor format (r o)] .
+  op errorSearchList : QidList -> [SearchList] [ctor format (r o)] .
+  op errorSSModule : QidList -> [SSModule] [ctor format (r o)] .
+  op errorSDL : QidList -> [ParseSDLResult] [ctor format (r o)] .
+  op errorTermStratList : QidList -> [TermStratList] [ctor format (r o)] .
+  
+  op labels : Module -> SortSet . *** as QidSet
+  op generateAll : SortSet -> Strat .
+  op labels : RuleSet -> SortSet . 
+  op _isIn_ : Qid SortSet -> Bool .
+  op term : SState -> TermSet .
+  op isInTS : Module Term TermSet -> Bool .
+  
+  var DB : Database .
+  vars M M' : Module .
+  var MN : ModuleName .
+  vars VS VS' : OpDeclSet .
+  vars QIL QIL' QIL'' : QidList .
+  var Atts : AttributeSet .
+  var X@STRATDB : STRATDB .
+  var O : Oid .
+  vars Q Q' L : Qid .
+  vars T T' T'' T''' T1 T2 T3 : Term .
+  var  TL : TermList .
+  var X@Database : DatabaseClass .
+  vars E E' E'' : Strat .
+  var SD : StratDef .
+  vars SDL SDL' SSM SSM' : SSModule .
+  var SL : SearchList .
+  var Sb : Substitution .
+  var SS : SortSet .
+  var RS : RuleSet .
+  var CO : Condition .
+  var AS : AttrSet .
+  var TS : TermSet .
+  var TyL : TypeList .
+  vars B B' : Bool .
+  var A : Assignment .
+  var V : Variable .
+  var S : Search .
+  var TSL : TermStratList .
+  var N : Nat .
+  vars QQ QQ' : Queue .
+  vars ST ST' : SState .
+  var  RP : [ResultPair] .
+  
+  
+  eq Q isIn (Q ; SS) = true .
+  eq Q isIn SS = false [owise] .
+  
+  eq labels(M) = labels(getRls(M)) .
+  eq labels(none) = none .
+  eq labels( (rl T => T' [label(L) AS] .) RS) = L ; labels(RS) .
+  eq labels( (crl T => T' if CO [label(L) AS] .) RS) = L ; labels(RS) .
+  
+  eq term(fail) = emptyTermSet .
+  eq term(q(T, QQ)) = T .
+  
+  eq isInTS(M, T, emptyTermSet) = false .
+  eq isInTS(M, T, (T' | TS)) = 
+     if getTerm(metaReduce(setRls(M,none),'_==_[T, T'])) == 'true.Bool then true
+     else isInTS(M, T, TS) fi .
+  
+  eq parseStratAux('bubble[T], M, VS) = errorStrat('PORQUE) [owise] .
+  
+  ceq parseStratAux('bubble[T], M, VS) = 
+     if RP :: ResultPair then parseStrat(getTerm(RP), M, VS)
+     else errorStrat( '\r 'Warning: 
+                 '\o printSyntaxError(RP, QIL) '\n
+                 '\r 'Error: '\o 'no 'parse 'for 'strategy QIL '\n)
+     fi 
+   if QIL := downQidList(T) /\
+      RP := metaParse(SGRAMMAR, QIL, 'Strategy) .
+
+  ceq parseSearchAux('bubble[T], M, VS) = 
+     if RP :: ResultPair then parseSL(getTerm(RP), M, VS)
+     else errorSearchList( '\r 'Warning: 
+                 '\o printSyntaxError(RP, QIL) '\n
+                 '\r 'Error: '\o 'no 'parse 'for 'searchexp QIL '\n) fi 
+   if QIL := downQidList(T) /\
+      RP := metaParse(SGRAMMAR, QIL, 'Search) .
+
+
+  eq parseStrat(T, M,VS) = errorStrat( 
+                 '\r 'PELIGRO: '\o 'caso 'no 'cubierto 'en 'parseStrat '\n)[owise] .
+  
+  eq parseStrat('`(_`)[T], M,VS) = parseStrat(T, M,VS) .
+  
+  ceq parseStrat('token[T], M,VS) = 
+      if Q isIn labels(M) then Q[(none).Substitution] 
+      else if Q isStrat M then call(qid(string(Q) + ".Strat"))
+           else errorStrat( 
+                 '\r 'Error: '\o Q 'is 'not 'a 'strategy 'identifier '\n) fi fi   
+   if Q := downQid(T) . 
+  ceq parseStrat('_`[_`]['token[T],T'], M,VS) =
+      if Q isIn labels(M) then Q[parseSubs(T',M,VS)] 
+      else errorStrat('\r 'Error: '\o Q 'is 'not 'a 'rule 'label '\n) fi
+   if Q := downQid(T) . 
+   
+  eq parseStrat('top[T], M,VS) = top(parseStrat(T, M,VS)) .
+  eq parseStrat('_`{_`}['token[T],T''], M,VS) =
+       parseStrat('_`[_`]`{_`}['token[T],'none.Substitution,T''], M,VS) .
+  ceq parseStrat('_`[_`]`{_`}['token[T],T',T''], M,VS) =
+      if Q isIn labels(M) then Q[parseSubs(T',M,VS)]{parseSL(T'',M,VS)} 
+      else errorStrat('\r 'Error: '\o Q 'is 'not 'a 'rule 'label '\n) fi
+   if Q := downQid(T) . 
+       
+  eq parseStrat('idle.Strategy, M,VS) = idle .
+  eq parseStrat('fail.Strategy, M,VS) = fails .
+  eq parseStrat('fails.Strategy, M,VS) = fails .
+  eq parseStrat('all.Strategy, M, VS) = generateAll(labels(M)) .
+  eq parseStrat('_|_[T,T'], M,VS) = or(parseStrat(T, M,VS), parseStrat(T', M,VS)) .
+  eq parseStrat('_;_[T,T'], M,VS) = seq(parseStrat(T, M,VS), parseStrat(T', M,VS)) .
+  eq parseStrat('_*[T], M,VS) = parseStrat(T, M,VS) * .
+  eq parseStrat('_+[T], M,VS) = parseStrat(T, M,VS) + .
+  eq parseStrat('_![T], M,VS) = parseStrat(T, M,VS) ! .
+  eq parseStrat('match_[T], M,VS) =
+     match(solveBubbles(T,setRls(M,none), false, VS, emptyDatabase),
+           ('true.Bool = 'true.Bool)) .
+  eq parseStrat('match_s.t._[T, T'], M,VS) =
+     match(solveBubbles(T,setRls(M,none), false, VS, emptyDatabase),
+           solveBubblesCond(T', addOps(VS,setRls(M,none)), 
+                 addInfoConds(addOps(VS,setRls(M,none))), false, VS, emptyDatabase)) .
+  eq parseStrat('xmatch_[T], M,VS) =
+     xmatch(solveBubbles(T,setRls(M,none), false, VS, emptyDatabase),
+            ('true.Bool = 'true.Bool)) .
+  eq parseStrat('xmatch_s.t._[T, T'], M,VS) =
+     xmatch(solveBubbles(T,setRls(M,none), false, VS, emptyDatabase),
+           solveBubblesCond(T', addOps(VS,setRls(M,none)), 
+                 addInfoConds(addOps(VS,setRls(M,none))), false, VS, emptyDatabase)) .
+  eq parseStrat('amatch_[T], M,VS) =
+     amatch(solveBubbles(T,setRls(M,none), false, VS, emptyDatabase),
+            ('true.Bool = 'true.Bool)) .
+  eq parseStrat('amatch_s.t._[T, T'], M,VS) =
+     amatch(solveBubbles(T,setRls(M,none), false, VS, emptyDatabase),
+           solveBubblesCond(T', addOps(VS,setRls(M,none)), 
+                 addInfoConds(addOps(VS,setRls(M,none))), false, VS, emptyDatabase)) .
+  eq parseStrat('if_then_else_fi[T, T', T''], M,VS) = 
+     if2( parseStrat(T, M,VS), parseStrat(T', M,VS), parseStrat(T'', M,VS)) .
+  eq parseStrat('_?_:_[T, T', T''], M,VS) = 
+     if2( parseStrat(T, M,VS), parseStrat(T', M,VS), parseStrat(T'', M,VS)) .
+  
+  eq if2(E, E', E'') = if(E,E',E'') . 
+***   if E := parseStrat(T, M,VS) /\
+***      E' := parseStrat(T', M,VS) /\
+***      E'' := parseStrat(T'', M,VS) .
+  eq parseStrat('_orelse_[T, T'], M,VS) =
+     orelse(parseStrat(T, M,VS), parseStrat(T', M,VS)) .
+  eq parseStrat('not[T], M,VS) = not(parseStrat(T, M,VS)) .
+  eq parseStrat('try[T], M,VS) = try(parseStrat(T, M,VS)) .
+  eq parseStrat('test[T], M,VS) = test(parseStrat(T, M,VS)) .
+  eq parseStrat('one[T], M,VS) = one(parseStrat(T, M,VS)) .
+  eq parseStrat('matchrew_by_[T,T'],M,VS) = 
+     matchrew(solveBubbles(T,setRls(M,none), false, VS, emptyDatabase), 
+              ('true.Bool = 'true.Bool),
+              parseTSL(T',M,VS)) .
+  eq parseStrat('xmatchrew_by_[T,T'],M,VS) = 
+     xmatchrew(solveBubbles(T,setRls(M,none), false, VS, emptyDatabase), 
+               ('true.Bool = 'true.Bool),
+               parseTSL(T',M,VS)) .
+  eq parseStrat('amatchrew_by_[T,T'],M,VS) = 
+     amatchrew(solveBubbles(T,setRls(M,none), false, VS, emptyDatabase), 
+               ('true.Bool = 'true.Bool),
+               parseTSL(T',M,VS)) .
+  eq parseStrat('matchrew_s.t._by_[T,T',T''],M,VS) = 
+     matchrew(solveBubbles(T,setRls(M,none), false, VS, emptyDatabase), 
+              solveBubblesCond(T', addOps(VS,setRls(M,none)), 
+                 addInfoConds(addOps(VS,setRls(M,none))), false, VS, emptyDatabase),
+              parseTSL(T'',M,VS)) .
+  eq parseStrat('xmatchrew_s.t._by_[T,T',T''],M,VS) = 
+     xmatchrew(solveBubbles(T,setRls(M,none), false, VS, emptyDatabase),  
+               solveBubblesCond(T', addOps(VS,setRls(M,none)), 
+                 addInfoConds(addOps(VS,setRls(M,none))), false, VS, emptyDatabase),
+               parseTSL(T'',M,VS)) .
+  eq parseStrat('amatchrew_s.t._by_[T,T',T''],M,VS) = 
+     amatchrew(solveBubbles(T,setRls(M,none), false, VS, emptyDatabase),  
+               solveBubblesCond(T', addOps(VS,setRls(M,none)), 
+                 addInfoConds(addOps(VS,setRls(M,none))), false, VS, emptyDatabase),
+               parseTSL(T'',M,VS)) .
+  eq parseStrat('_`(_`)['token[Q],'bubble[T]], M,VS) =
+     call(solveBubbles('bubble['__[Q,''`(.Qid,T,''`).Qid]],setRls(M,none), false, VS, emptyDatabase)) .
+     
+  
+  eq parseTSL('_using_[T,T'], M,VS) = 
+     solveBubbles(T,setRls(M,none), false, VS, emptyDatabase) using parseStrat(T',M,VS) .
+  eq parseTSL('_`,_[T,T'],M,VS) = 
+     (parseTSL(T,M,VS) , parseTSL(T',M,VS)) .
+  
+  eq parseSubs('none.Substitution, M,VS) = none .
+  eq parseSubs('_;_[T, T'], M,VS) = parseSubs(T, M,VS) ; parseSubs(T', M,VS) .
+  eq parseSubs('_<-_[T,T'], M,VS) = 
+     solveBubbles(T,setRls(M,none), false, VS, emptyDatabase) 
+       <- solveBubbles(T',setRls(M,none), false, VS, emptyDatabase) .
+
+  eq parseSL('_`,_[T,T'], M,VS) = parseSL(T,M,VS) parseSL(T',M,VS) .
+  eq parseSL(T, M,VS) = bfs(parseStrat(T,M,VS)) [owise].
+  
+  *** parsing strat modules
+  
+  ceq parseSDL(T, M, VS) = SSM'
+   if {M', SSM', VS'} := parseSDL(T, addSorts('Strat,M), VS, none) .
+  ceq parseSDL(T, M, VS) =  errorSSModule(QIL)
+   if errorSDL(QIL) := parseSDL(T, addSorts('Strat,M), VS, none) .
+   
+***(   
+     eq parseDecl('var_:_.['neTokenList[T], T'], PU, U, VDS)
+    = parseDecl('vars_:_.['neTokenList[T], T'], PU, U, VDS) .
+  eq parseDecl('vars_:_.['neTokenList[T], T'], PU, U, VDS)
+    = < PU ; U ; VDS parseVars(downQidList(T), parseType(T')) > .
+)
+
+  eq parseSDL('var_:_.['neTokenList[T], T'], M, VS, SSM) = 
+     parseSDL('vars_:_.['neTokenList[T], T'], M, VS, SSM) .
+  eq parseSDL('vars_:_.['neTokenList[T], T'], M, VS, SSM) = 
+     { M, SSM, VS parseVars(downQidList(T), parseType(T')) } .
+  eq parseSDL('strat_:`@_.['token[T], 'token[T']], M, VS, SSM) = 
+     { addOps(op downQid(T) : nil -> 'Strat [none] ., M),
+       SSM strat downQid(T) : nil ., VS } .
+  eq parseSDL('strat_:_@_.['token[T], T', 'token[T'']], M, VS, SSM) = 
+     { addOps(op downQid(T) : parseTypeList(T') -> 'Strat [none] ., M),
+       SSM strat downQid(T) : parseTypeList(T') ., VS } .
+  eq parseSDL('sd_:=_.[T,T'], M, VS, SSM) =
+     { M, SSM (csd solveBubbles(T,setRls(M,none),false,VS,emptyDatabase) :=
+                    parseStratAux(T',M,VS) if ('true.Bool = 'true.Bool) .), VS } .
+  eq parseSDL('csd_:=_if_.[T,T',T''], M, VS, SSM) =
+     { M, SSM (csd solveBubbles(T,setRls(M,none),false,VS,emptyDatabase) :=
+                    parseStratAux(T',M,VS) if 
+                    solveBubblesCond(T'', addOps(VS,setRls(M,none)), 
+                 addInfoConds(addOps(VS,setRls(M,none))), false, VS, emptyDatabase) .), VS } .
+  eq parseSDL('__[TL], M, VS, SSM) =  parseSDL*(TL, M, VS, SSM) .
+  eq parseSDL*(empty, M, VS, SSM) = { M, SSM, VS } .
+  ceq parseSDL*((T,TL), M, VS, SSM) =
+      parseSDL*(TL, M', VS', SSM')
+   if {M', SSM', VS'} := parseSDL(T, M, VS, SSM) .
+  ceq parseSDL*((T,TL), M, VS, SSM) = errorSDL(QIL) 
+   if errorSDL(QIL) := parseSDL(T, M, VS, SSM) .
+  
+  eq generateAll(Q) = Q[(none).Substitution] .
+  eq generateAll(Q ; Q' ; SS) = or(Q[(none).Substitution], generateAll(Q' ; SS)) .
+         
+  *** parsing error handling  
+    
+  eq top(errorStrat(QIL)) = errorStrat(QIL) .
+  eq Q[errorSubstitution(QIL)] = errorStrat(QIL) .
+  eq Q[errorSubstitution(QIL)]{SL} = errorStrat(QIL) .
+  eq Q[Sb]{errorSearchList(QIL)} = errorStrat(QIL) .
+  eq Q[errorSubstitution(QIL)]{errorSearchList(QIL')} = errorStrat(QIL QIL') .
+  eq seq(errorStrat(QIL),E) = errorStrat(QIL) .
+  eq seq(E,errorStrat(QIL)) = errorStrat(QIL) .
+  eq seq(errorStrat(QIL),errorStrat(QIL')) = errorStrat(QIL QIL') .
+  eq or(errorStrat(QIL),E) = errorStrat(QIL) .
+  eq or(E, errorStrat(QIL)) = errorStrat(QIL) .
+  eq or(errorStrat(QIL), errorStrat(QIL')) = errorStrat(QIL QIL') .
+  eq errorStrat(QIL) * = errorStrat(QIL) .
+  eq errorStrat(QIL) + = errorStrat(QIL) .
+  eq errorStrat(QIL) ! = errorStrat(QIL) .
+  eq match(qidError(QIL), CO) = errorStrat(QIL) .
+  eq match(T,conditionError(QIL)) = errorStrat(QIL) . 
+  eq match(qidError(QIL),conditionError(QIL')) = errorStrat(QIL QIL') . 
+  eq xmatch(qidError(QIL), CO) = errorStrat(QIL) .
+  eq xmatch(T,conditionError(QIL)) = errorStrat(QIL) . 
+  eq xmatch(qidError(QIL),conditionError(QIL')) = errorStrat(QIL QIL') . 
+  eq amatch(qidError(QIL), CO) = errorStrat(QIL) .
+  eq amatch(T,conditionError(QIL)) = errorStrat(QIL) . 
+  eq amatch(qidError(QIL),conditionError(QIL')) = errorStrat(QIL QIL') . 
+  eq if2(errorStrat(QIL), E, E') = errorStrat(QIL) .
+  eq if2(E, errorStrat(QIL), E') = errorStrat(QIL) .
+  eq if2(errorStrat(QIL), errorStrat(QIL'), E') = errorStrat(QIL QIL') .
+  eq if2(E, E', errorStrat(QIL)) = errorStrat(QIL) .
+  eq if2(errorStrat(QIL), E', errorStrat(QIL')) = errorStrat(QIL QIL') .
+  eq if2(E, errorStrat(QIL), errorStrat(QIL')) = errorStrat(QIL QIL') .
+  eq if2(errorStrat(QIL), errorStrat(QIL'), errorStrat(QIL'')) = errorStrat(QIL QIL' QIL'') .
+  eq orelse(errorStrat(QIL),E) = errorStrat(QIL) .
+  eq orelse(E, errorStrat(QIL)) = errorStrat(QIL) .
+  eq orelse(errorStrat(QIL), errorStrat(QIL')) = errorStrat(QIL QIL') .
+  eq not(errorStrat(QIL)) = errorStrat(QIL) .
+  eq try(errorStrat(QIL)) = errorStrat(QIL) .
+  eq test(errorStrat(QIL)) = errorStrat(QIL) .
+  eq one(errorStrat(QIL)) = errorStrat(QIL) .
+  eq call(qidError(QIL)) = errorStrat(QIL) .
+  eq matchrew(qidError(QIL), CO, TSL) = errorStrat(QIL) .
+  eq matchrew(T,CO, errorTermStratList(QIL)) = errorStrat(QIL) . 
+  eq matchrew(qidError(QIL),CO, errorTermStratList(QIL')) = errorStrat(QIL QIL') . 
+  eq matchrew(T, conditionError(QIL'), TSL) = errorStrat(QIL') .
+  eq matchrew(qidError(QIL), conditionError(QIL'), TSL) = errorStrat(QIL QIL') .
+  eq matchrew(T, conditionError(QIL'), errorTermStratList(QIL)) = errorStrat(QIL' QIL) . 
+  eq matchrew(qidError(QIL), conditionError(QIL'), errorTermStratList(QIL'')) = errorStrat(QIL QIL' QIL'') . 
+  eq xmatchrew(qidError(QIL), CO, TSL) = errorStrat(QIL) .
+  eq xmatchrew(T,CO, errorTermStratList(QIL)) = errorStrat(QIL) . 
+  eq xmatchrew(qidError(QIL),CO, errorTermStratList(QIL')) = errorStrat(QIL QIL') . 
+  eq xmatchrew(T, conditionError(QIL'), TSL) = errorStrat(QIL') .
+  eq xmatchrew(qidError(QIL), conditionError(QIL'), TSL) = errorStrat(QIL QIL') .
+  eq xmatchrew(T, conditionError(QIL'), errorTermStratList(QIL)) = errorStrat(QIL' QIL) . 
+  eq xmatchrew(qidError(QIL), conditionError(QIL'), errorTermStratList(QIL'')) = errorStrat(QIL QIL' QIL'') . 
+  eq amatchrew(qidError(QIL), CO, TSL) = errorStrat(QIL) .
+  eq amatchrew(T,CO, errorTermStratList(QIL)) = errorStrat(QIL) . 
+  eq amatchrew(qidError(QIL),CO, errorTermStratList(QIL')) = errorStrat(QIL QIL') . 
+  eq amatchrew(T, conditionError(QIL'), TSL) = errorStrat(QIL') .
+  eq amatchrew(qidError(QIL), conditionError(QIL'), TSL) = errorStrat(QIL QIL') .
+  eq amatchrew(T, conditionError(QIL'), errorTermStratList(QIL)) = errorStrat(QIL' QIL) . 
+  eq amatchrew(qidError(QIL), conditionError(QIL'), errorTermStratList(QIL'')) = errorStrat(QIL QIL' QIL'') . 
+  eq errorSearchList(QIL) S = errorSearchList(QIL) .  
+  eq S errorSearchList(QIL) = errorSearchList(QIL) . 
+  eq bfs(errorStrat(QIL)) =  errorSearchList(QIL) . 
+  eq errorSSModule(QIL) SD = errorSSModule(QIL) .  
+  eq qidError(QIL) using E = errorTermStratList(QIL) .  
+  eq T using errorStrat(QIL) = errorTermStratList(QIL) .
+  eq qidError(QIL) using errorStrat(QIL') = errorTermStratList(QIL QIL') .
+  eq errorTermStratList(QIL), TS:TermStrat = errorTermStratList(QIL) .
+  eq TS:TermStrat, errorTermStratList(QIL) = errorTermStratList(QIL) .
+  eq errorTermStratList(QIL), errorTermStratList(QIL') = errorTermStratList(QIL QIL') .
+  eq errorSubstitution(QIL) ; A = errorSubstitution(QIL) .
+  eq qidError(QIL) <- T = errorSubstitution(QIL) .
+  eq V <- qidError(QIL) = errorSubstitution(QIL) .
+  eq qidError(QIL) <- qidError(QIL') = errorSubstitution(QIL QIL') .
+  eq { unitError(QIL), SSM, VS } = errorSDL(QIL) .
+  eq { M, errorSSModule(QIL), VS } = errorSDL(QIL) .
+  eq { unitError(QIL), errorSSModule(QIL'), VS } = errorSDL(QIL QIL') .
+  eq csd qidError(QIL) := E if CO . = errorSSModule(QIL) .
+  eq csd T := errorStrat(QIL) if CO . = errorSSModule(QIL) .
+  eq csd qidError(QIL) := errorStrat(QIL') if CO . = errorSSModule(QIL QIL') .
+  eq csd T := E if conditionError(QIL) . = errorSSModule(QIL) .
+  eq csd qidError(QIL) := E if conditionError(QIL') . = errorSSModule(QIL QIL') .
+  eq csd T := errorStrat(QIL) if conditionError(QIL') . = errorSSModule(QIL QIL') .
+  eq csd qidError(QIL) := errorStrat(QIL') if conditionError(QIL'') . = errorSSModule(QIL QIL' QIL'') .
+  eq strat Q : qidError(QIL) . = errorSSModule(QIL) .
+  eq errorSSModule(QIL) errorSSModule(QIL') = errorSSModule(QIL QIL') .
+  eq errorSSModule(QIL) X:StratOp = errorSSModule(QIL) .
+  eq errorSSModule(QIL) X:StratDef = errorSSModule(QIL) .
+  eq X:StratOp errorSSModule(QIL) = errorSSModule(QIL) .
+  eq X:StratDef errorSSModule(QIL) = errorSSModule(QIL) .
+  
+  *** commands processing
+    
+  ceq procSrew(M, SDL, T, E) = < true, 
+                                'result getType(metaReduce(M,T')) ': '\n
+                                '\t eMetaPrettyPrint(M, T') '\n, q(T', QQ) >
+   if T1 := getTerm(metaReduce(M, T)) /\
+      q(T', QQ) := next(M, SDL, { T1 ; E }) .
+  
+  eq procSrew(M, SDL, T, E) = < false, ('No 'possible 'rewriting '. '\n), fail > [owise] .
+   
+  ceq procNext(M, SDL, q(T,QQ), TS, false) = < true, 
+                                  'result getType(metaReduce(M,T')) ': '\n
+                                  '\t eMetaPrettyPrint(M, T') '\n, q(T',QQ') >
+   if q(T',QQ') := next(M, SDL, QQ) /\ not(isInTS(M, T', TS)) .
+  
+  ceq procNext(M, SDL, q(T,QQ), TS, false) = procNext(M, SDL, q(T',QQ'), TS, false) 
+   if q(T',QQ') := next(M, SDL, QQ) /\ isInTS(M, T', TS) .
+  
+  ceq procNext(M, SDL, q(T,QQ), TS, true) = < true, 
+                                  'result getType(metaReduce(M,T')) ': '\n
+                                  '\t eMetaPrettyPrint(M, T') '\n, q(T',QQ') >
+   if q(T',QQ') := next(M, SDL, QQ) .
+   
+  eq procNext(M, SDL, ST, TS, B) = < false, 
+                                 ('No 'more 'solutions '. '\n), fail > [owise] .
+  
+  ceq procSrewAll(M, SDL, T, E, B) = < true, 
+        procNextAll(M, SDL, q(T', QQ), T', 2, QIL, B), fail >
+   if T1 := getTerm(metaReduce(M, T)) /\
+      q(T', QQ) := next(M, SDL, { T1 ; E }) /\
+      QIL := 'Solution '1 ': '\t eMetaPrettyPrint(M, T') '\n .
+  
+  eq procSrewAll(M, SDL, T, E, B) = < false, 
+                               ('No 'possible 'rewriting '. '\n), fail > [owise] .
+
+  ceq procNextAll(M, SDL, QQ, TS, N, QIL, false) = 
+      procNextAll(M, SDL, q(T',QQ'), (T' | TS), N + 1, QIL', false)
+   if q(T',QQ') := next(M, SDL, QQ) /\ 
+      not(isInTS(M, T', TS)) /\
+      QIL' := QIL 'Solution qid(string(N,10)) ': '\t eMetaPrettyPrint(M, T') '\n .
+  
+  ceq procNextAll(M, SDL, QQ, TS, N, QIL, false) = 
+      procNextAll(M, SDL, q(T',QQ'), TS, N, QIL, false)
+   if q(T',QQ') := next(M, SDL, QQ) /\ 
+      isInTS(M, T', TS) .
+  
+  ceq procNextAll(M, SDL, QQ, TS, N, QIL, true) = 
+      procNextAll(M, SDL, q(T',QQ'), (T' | TS), N + 1, QIL', false)
+   if q(T',QQ') := next(M, SDL, QQ) /\ 
+      QIL' := QIL 'Solution qid(string(N,10)) ': '\t eMetaPrettyPrint(M, T') '\n .
+  
+  eq procNextAll(M, SDL, ST, TS, N, QIL, B) = QIL [owise] .
+  
+  
+  crl [stratdef] :
+     < O : X@STRATDB | db : DB,  input : ('smod_is_endsm[T,T']), 
+                       output : nil, default : MN,
+                       state : ST, stratDefs : SDL, Atts >
+     => < O : X@STRATDB | db : DB, input : nilTermList, 
+           output : ('\b 'Introduced 'strategy 'module parseHeader(T) '\o '\n ), 
+           default : MN, 
+           state : ST, stratDefs : SDL', Atts > 
+     if T'' := getTerm(metaReduce(STRAT-GRAMMAR, T')) /\
+        SDL' := parseSDL(T'', getFlatModule(MN, DB), getVars(MN, DB)) .
+           
+  crl [stratdef-error] :
+     < O : X@STRATDB | db : DB,  input : ('smod_is_endsm[T,T']), 
+                       output : nil, default : MN,
+                       Atts >
+     => < O : X@STRATDB | db : DB, input : nilTermList, 
+           output : QIL, default : MN, Atts > 
+     if errorSSModule(QIL) := parseSDL(T', getFlatModule(MN, DB), getVars(MN, DB)) .
+           
+  crl [srew] :
+     < O : X@STRATDB | db :     DB,  input :   ('srew_using_.[T,T']), 
+                       output : nil, default : MN,
+                       state : ST, stratDefs : SDL, results : TS, Atts >
+     => < O : X@STRATDB | db : DB, input : nilTermList, 
+           output : ('\b 'rewrite 'with 'strategy ': '\o '\n QIL'), 
+           default : MN, 
+           state : if B then ST' else ST fi, stratDefs : SDL, 
+           results : if B then term(ST') else TS fi, Atts > 
+  if M := getFlatModule(MN, DB) /\
+     T1 := solveBubbles(T, setRls(M,none), false, getVars(MN, DB), DB) /\
+     E := parseStratAux(T', extendStrat(M, SDL), getVars(MN, DB)) /\
+     < B, QIL', ST' > := procSrew(extendStrat(M, SDL), SDL, T1, E)  .
+  
+  crl [srew-error] :
+     < O : X@STRATDB | db : DB,  input : ('srew_using_.[T,T']), 
+                       output : nil, default : MN, Atts >
+     => < O : X@STRATDB | db : DB, input : nilTermList, 
+           output : QIL, default : MN, Atts > 
+  if M := getFlatModule(MN, DB) /\
+     qidError(QIL) := solveBubbles(T, setRls(M,none), false, getVars(MN, DB), DB) .
+  
+  crl [srew-error] :
+     < O : X@STRATDB | db : DB,  input : ('srew_using_.[T,T']), 
+                       output : nil, default : MN, stratDefs : SDL, Atts >
+     => < O : X@STRATDB | db : DB, input : nilTermList, 
+           output : QIL, default : MN, stratDefs : SDL, Atts > 
+  if M := getFlatModule(MN, DB) /\
+     errorStrat(QIL) := parseStratAux(T', extendStrat(M, SDL), getVars(MN, DB)) .
+  
+  crl [srewall] :
+     < O : X@STRATDB | db :     DB,  input :   ('srewall_using_.[T,T']), 
+                       output : nil, default : MN,
+                       state : ST, stratDefs : SDL, repeat : B', results : TS, Atts >
+     => < O : X@STRATDB | db : DB, input : nilTermList, 
+           output : ('\b 'rewrite 'with 'strategy ': '\o '\n QIL'), 
+           default : MN, 
+           state : ST', stratDefs : SDL, 
+           repeat : B', results : TS, Atts > 
+  if M := getFlatModule(MN, DB) /\
+     T1 := solveBubbles(T, setRls(M,none), false, getVars(MN, DB), DB) /\
+     E := parseStratAux(T', extendStrat(M, SDL), getVars(MN, DB)) /\
+     < B, QIL', ST' > := procSrewAll(extendStrat(M, SDL), SDL, T1, E, B')  .
+  
+  crl [srewall-error] :
+     < O : X@STRATDB | db :     DB,  input :   ('srewall_using_.[T,T']), 
+                       output : nil, default : MN,
+                       Atts >
+     => < O : X@STRATDB | db : DB, input : nilTermList, 
+           output : QIL, 
+           default : MN, Atts > 
+  if M := getFlatModule(MN, DB) /\
+     qidError(QIL) := solveBubbles(T, setRls(M,none), false, getVars(MN, DB), DB) .
+  
+  crl [srewall-error] :
+     < O : X@STRATDB | db :     DB,  input :   ('srewall_using_.[T,T']), 
+                       output : nil, default : MN, stratDefs : SDL,
+                       Atts >
+     => < O : X@STRATDB | db : DB, input : nilTermList, 
+           output : QIL, stratDefs : SDL,
+           default : MN, Atts > 
+  if M := getFlatModule(MN, DB) /\
+     errorStrat(QIL) := parseStratAux(T', extendStrat(M, SDL), getVars(MN, DB)) .
+     
+  crl [cont] :
+     < O : X@STRATDB | db :     DB,  input :   ('cont`using_.[T']), 
+                       output : nil, default : MN,
+                       state : q(T, QQ), stratDefs : SDL, results : TS, Atts >
+     => < O : X@STRATDB | db : DB, input : nilTermList, 
+           output : ('\b 'rewrite 'with 'strategy ': '\o '\n QIL'), 
+           default : MN, 
+           state : if B then ST' else q(T, QQ) fi, stratDefs : SDL, 
+           results : if B then term(ST') else TS fi, Atts > 
+     if M := getFlatModule(MN, DB) /\
+        E := parseStratAux(T', extendStrat(M, SDL), getVars(MN, DB)) /\
+        < B, QIL', ST' > := procSrew(extendStrat(M, SDL), SDL, T, E) .
+  
+  crl [cont] :
+     < O : X@STRATDB | db :     DB,  input :   ('cont`using_.[T']), 
+                       output : nil, default : MN,
+                       state : QQ, stratDefs : SDL, results : TS, Atts >
+     => < O : X@STRATDB | db : DB, input : nilTermList, 
+           output : ('\b 'no 'term 'to 'continue), 
+           default : MN, 
+           state : QQ, stratDefs : SDL, results : TS, Atts > 
+     if QQ == fail or QQ == nilQ .
+  
+  crl [cont-error] :
+     < O : X@STRATDB | db :     DB,  input :   ('cont`using_.[T']), 
+                       output : nil, default : MN,
+                       state : ST, stratDefs : SDL, results : TS, Atts >
+     => < O : X@STRATDB | db : DB, input : nilTermList, 
+           output : QIL, 
+           default : MN, 
+           state : ST, stratDefs : SDL, results : TS, Atts > 
+     if M := getFlatModule(MN, DB) /\
+        errorStrat(QIL) := parseStratAux(T', extendStrat(M, SDL), getVars(MN, DB)) .
+
+  crl [next] :
+     < O : X@STRATDB | db :     DB,  input : ('next`..@Command@), 
+                       output : nil, default : MN,
+                       state : ST, stratDefs : SDL, results : TS, 
+                       repeat : B', Atts >
+     => < O : X@STRATDB | db : DB, input : nilTermList, 
+           output : ('\b 'next 'solution 'rewriting 'with 'strategy ': '\o '\n QIL'), 
+           default : MN, 
+           state : if B then ST' else ST fi, stratDefs : SDL, 
+           results : if B then (term(ST') | TS) else TS fi, 
+           repeat : B', Atts > 
+     if M := getFlatModule(MN, DB) /\
+        < B, QIL', ST' > := procNext(extendStrat(M, SDL), SDL, ST, TS, B') .
+
+  rl [clean-state] : 
+     < O : X@STRATDB | input : 'clean`state`..@Command@, output : nil, 
+                       state : ST, results : TS, 
+                       Atts >
+  => < O : X@STRATDB | input : nilTermList,  
+                       output : ('\b 'State 'empty '. '\n), 
+                       state : nilQ, results : emptyTermSet,
+                       Atts > .
+  
+  rl [show-repeats] : 
+     < O : X@STRATDB | input : 'show`repeats`..@Command@,  output : nil, repeat : B, Atts >
+  => < O : X@STRATDB | input : nilTermList,  
+                       output : ('Repeats 'will 'be 'shown '. '\n),
+                       repeat : true, Atts > .
+  
+  rl [show-no-repeats] : 
+     < O : X@STRATDB | input : 'show`no`repeats`..@Command@,  output : nil, 
+       repeat : B, Atts >
+  => < O : X@STRATDB | input : nilTermList,  
+                       output : ('Repeats 'will 'not 'be 'shown '. '\n),
+                       repeat : false, Atts > .
+endm
+
+mod STRAT-FULL-MAUDE is
+  pr META-STRAT-SIGN .
+  pr STRAT-DATABASE-HANDLING .
+  pr PREDEF-UNITS .
+  inc LOOP-MODE .
+
+  subsort Object < State .
+
+  op o : -> Oid .
+  op init : -> System .
+
+  var  Atts : AttributeSet .
+  var  X@STRATDB : STRATDB .
+  var  X@Database : DatabaseClass .
+  var  O : Oid .
+  var  DB : Database .
+  var  MN : Header .
+  vars QIL QIL' QIL'' : QidList .
+  var  TL : TermList .
+  var  N : Nat .
+  vars RP RP' : ResultPair .
+  
+
+  rl [init] : init
+     => [nil,
+         < o : STRATDB | 
+            db : initialDatabase,
+            input : nilTermList, output : nil, 
+            default : 'CONVERSION,
+            state : nilQ,
+            stratDefs : none,
+            results : emptyTermSet,
+            repeat : false >,
+            ('\n '\t '\s '\s '\s '\s 'Maude 'Strategy 'Language '2.6
+             '\s '`( 'February '27th '`, '\s '2011 '`) '\n)] .
+
+  crl [in] :
+    [QIL, 
+     < O : X@Database | 
+         input : nilTermList, output : nil, Atts >, 
+     QIL']
+    => [nil, 
+        < O : X@Database | 
+            input : getTerm(metaParse(STRAT-GRAMMAR, QIL, '@Input@)),
+            output : nil, Atts >, 
+         QIL'] 
+    if QIL =/= nil /\ metaParse(STRAT-GRAMMAR, QIL, '@Input@) :: ResultPair .
+     
+  crl [in] :
+    [QIL, 
+     < O : X@Database | 
+         db : DB, input : nilTermList, output : nil, default : MN, Atts >, 
+     QIL']
+    => [nil, 
+       < O : X@Database | db : DB, input : nilTermList, 
+           output : ('\r 'Warning: 
+                     printSyntaxError(metaParse(STRAT-GRAMMAR, QIL, '@Input@), QIL) 
+                     '\n
+                     '\r 'Error: '\o 'No 'parse 'for 'input. '\n), 
+           default : MN, Atts >, 
+       QIL'] 
+    if QIL =/= nil /\ not metaParse(STRAT-GRAMMAR, QIL, '@Input@) :: ResultPair .
+    
+  crl [out] :
+    [QIL, 
+     < O : X@Database | output : QIL', Atts >, 
+     QIL'']
+    => [QIL, 
+        < O : X@Database | output : nil, Atts >, 
+        (QIL'' QIL')] 
+    if QIL' =/= nil .
+endm
+
+*** END
+*** STRATEGY LANGUAGE
+
+
+*** SYNCHRONOUS PRODUCT + STRATEGIES
+*** BEGIN
+    
+fmod SYNCPROD+STRAT-META-SIGN is
+   pr META-LEVEL .
+   pr SYNCPROD-META-SIGN .
+   pr META-STRAT-SIGN . 
+
+   op SYNCPROD+STRAT-GRAMMAR : -> FModule .
+   eq SYNCPROD+STRAT-GRAMMAR =
+      addImports((including 'STRAT-COMMAND-SIGN .), SYNCPROD-GRAMMAR) .
+endfm
+    
+mod STRAT-FULL-MAUDE+SYNC-PROD is
+  pr SYNCPROD-EXPR .
+  pr SYNCPROD+STRAT-META-SIGN .
+  ex LOOP-MODE * (sort State to State') .
+  pr STRAT-DATABASE-HANDLING .
+  pr PREDEF-UNITS .
+
+  subsort Object < State' .
+
+  op o : -> Oid .
+  op init : -> System .
+
+  var  Atts : AttributeSet .
+  var  X@STRATDB : STRATDB .
+  var  X@Database : DatabaseClass .
+  var  O : Oid .
+  var  DB : Database .
+  var  MN : Header .
+  vars QIL QIL' QIL'' : QidList .
+  var  TL : TermList .
+  var  N : Nat .
+  vars RP RP' : ResultPair .
+  
+
+  rl [init] : init
+     => [nil,
+         < o : STRATDB | 
+            db : initialDatabase,
+            input : nilTermList, output : nil, 
+            default : 'CONVERSION,
+            state : nilQ,
+            stratDefs : none,
+            results : emptyTermSet,
+            repeat : false >,
+            ('\n '\t '\s '\s '\s '\s 'Synchronous 'Product 'with 'Strategy 'Language 
+             '\s '`( 'March '\s '2018 '`) '\n)] .
+
+  crl [in] :
+    [QIL, 
+     < O : X@Database | 
+         input : nilTermList, output : nil, Atts >, 
+     QIL']
+    => [nil, 
+        < O : X@Database | 
+            input : getTerm(metaParse(SYNCPROD+STRAT-GRAMMAR, QIL, '@Input@)),
+            output : nil, Atts >, 
+         QIL'] 
+    if QIL =/= nil /\ metaParse(SYNCPROD+STRAT-GRAMMAR, QIL, '@Input@) :: ResultPair .
+     
+  crl [in] :
+    [QIL, 
+     < O : X@Database | 
+         db : DB, input : nilTermList, output : nil, default : MN, Atts >, 
+     QIL']
+    => [nil, 
+       < O : X@Database | db : DB, input : nilTermList, 
+           output : ('\r 'Warning: 
+                     printSyntaxError(metaParse(SYNCPROD+STRAT-GRAMMAR, QIL, '@Input@), QIL) 
+                     '\n
+                     '\r 'Error: '\o 'No 'parse 'for 'input. '\n), 
+           default : MN, Atts >, 
+       QIL'] 
+    if QIL =/= nil /\ not metaParse(SYNCPROD+STRAT-GRAMMAR, QIL, '@Input@) :: ResultPair .
+    
+  crl [out] :
+    [QIL, 
+     < O : X@Database | output : QIL', Atts >, 
+     QIL'']
+    => [QIL, 
+        < O : X@Database | output : nil, Atts >, 
+        (QIL'' QIL')] 
+    if QIL' =/= nil .
+endm
+
+loop init .
+
+*** END
+*** SYNCHRONOUS PRODUCT + STRATEGIES
